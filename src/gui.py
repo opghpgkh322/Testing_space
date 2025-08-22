@@ -151,9 +151,10 @@ class MaterialsTab(QWidget):
 
 
 class WarehouseTab(QWidget):
-    def __init__(self, db_path):
+    def __init__(self, db_path, main_window):
         super().__init__()
         self.db_path = db_path
+        self.main_window = main_window
         self.repo_root = self.find_git_root(db_path)
         self.init_ui()
         self.load_data()
@@ -220,7 +221,9 @@ class WarehouseTab(QWidget):
         main_layout.addLayout(btn_layout)
         self.setLayout(main_layout)
 
+        # Кнопки Git
         git_btn_layout = QHBoxLayout()
+
         self.git_pull_btn = QPushButton("Git pull database.db")
         self.git_pull_btn.clicked.connect(self.git_pull)
         git_btn_layout.addWidget(self.git_pull_btn)
@@ -229,7 +232,7 @@ class WarehouseTab(QWidget):
         self.git_push_btn.clicked.connect(self.git_push)
         git_btn_layout.addWidget(self.git_push_btn)
 
-        layout.addLayout(git_btn_layout)
+        main_layout.addLayout(git_btn_layout)
 
         # Если репозиторий не найден, отключаем кнопки
         if self.repo_root is None:
@@ -238,22 +241,52 @@ class WarehouseTab(QWidget):
             self.git_pull_btn.setToolTip("Git репозиторий не найден")
             self.git_push_btn.setToolTip("Git репозиторий не найден")
 
+        self.setLayout(main_layout)
+
     def git_pull(self):
         if self.repo_root is None:
             QMessageBox.critical(self, "Ошибка", "Git репозиторий не найден")
             return
 
+        # Предупреждение о возможной потере локальных изменений
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение",
+            "Принудительный git pull может перезаписать локальные изменения. Продолжить?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.No:
+            return
+
         try:
-            result = subprocess.run(['git', 'pull', 'origin', 'master'],
+            # Выполняем git pull с принудительным обновлением
+            result = subprocess.run(['git', 'fetch', 'origin'],
                                     cwd=self.repo_root,
                                     capture_output=True,
                                     text=True,
                                     timeout=30)
-            if result.returncode == 0:
+
+            if result.returncode != 0:
+                error_msg = result.stderr if result.stderr else result.stdout
+                QMessageBox.critical(self, "Ошибка", f"Ошибка при получении изменений:\n{error_msg}")
+                return
+
+            # Принудительно сбрасываем файл database.db к версии из удаленного репозитория
+            reset_result = subprocess.run(['git', 'checkout', 'origin/master', '--', 'data/database.db'],
+                                          cwd=self.repo_root,
+                                          capture_output=True,
+                                          text=True,
+                                          timeout=30)
+
+            if reset_result.returncode == 0:
                 QMessageBox.information(self, "Успех", "Склад заполнился актуальными остатками")
-                self.load_data()
+                # Перезагружаем все вкладки
+                self.main_window.reload_all_tabs()
             else:
-                QMessageBox.critical(self, "Ошибка", "Ошибка в проведении операции, проверьте интернет соединение")
+                error_msg = reset_result.stderr if reset_result.stderr else reset_result.stdout
+                QMessageBox.critical(self, "Ошибка", f"Ошибка при обновлении файла:\n{error_msg}")
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка: {str(e)}")
 
@@ -264,25 +297,42 @@ class WarehouseTab(QWidget):
 
         try:
             # Добавляем только database.db
-            subprocess.run(['git', 'add', 'data/database.db'],
-                           cwd=self.repo_root,
-                           check=True)
+            add_result = subprocess.run(['git', 'add', 'data/database.db'],
+                                        cwd=self.repo_root,
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=30)
+
+            if add_result.returncode != 0:
+                error_msg = add_result.stderr if add_result.stderr else add_result.stdout
+                QMessageBox.critical(self, "Ошибка", f"Ошибка при добавлении файла:\n{error_msg}")
+                return
 
             # Коммитим
-            subprocess.run(['git', 'commit', '-m', 'Update database from application'],
-                           cwd=self.repo_root,
-                           check=True)
+            commit_result = subprocess.run(['git', 'commit', '-m', 'Update database from application'],
+                                           cwd=self.repo_root,
+                                           capture_output=True,
+                                           text=True,
+                                           timeout=30)
+
+            if commit_result.returncode != 0 and "nothing to commit" not in commit_result.stderr:
+                error_msg = commit_result.stderr if commit_result.stderr else commit_result.stdout
+                QMessageBox.critical(self, "Ошибка", f"Ошибка при коммите:\n{error_msg}")
+                return
 
             # Пушим
-            result = subprocess.run(['git', 'push', 'origin', 'master'],
-                                    cwd=self.repo_root,
-                                    capture_output=True,
-                                    text=True,
-                                    timeout=30)
-            if result.returncode == 0:
+            push_result = subprocess.run(['git', 'push', 'origin', 'master'],
+                                         cwd=self.repo_root,
+                                         capture_output=True,
+                                         text=True,
+                                         timeout=30)
+
+            if push_result.returncode == 0:
                 QMessageBox.information(self, "Успех", "Файл склада отправлен в репозиторий")
             else:
-                QMessageBox.critical(self, "Ошибка", "Ошибка в проведении операции, проверьте интернет соединение")
+                error_msg = push_result.stderr if push_result.stderr else push_result.stdout
+                QMessageBox.critical(self, "Ошибка", f"Ошибка при отправке:\n{error_msg}")
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка: {str(e)}")
 
@@ -1497,7 +1547,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.materials_tab, "Материалы")
 
         # Вкладка склада
-        self.warehouse_tab = WarehouseTab(db_path)
+        self.warehouse_tab = WarehouseTab(db_path, self)
         self.tabs.addTab(self.warehouse_tab, "Склад")
 
         # Вкладка изделий
@@ -1510,6 +1560,15 @@ class MainWindow(QMainWindow):
 
         # Статус бар
         self.statusBar().showMessage("Готово")
+
+    def reload_all_tabs(self):
+        """Перезагружает данные во всех вкладках"""
+        self.materials_tab.load_data()
+        self.warehouse_tab.load_data()
+        self.products_tab.load_products()
+        # Для orders_tab обновляем историю и продукты
+        self.orders_tab.load_order_history()
+        self.orders_tab.load_products()
 
 
 if __name__ == "__main__":
