@@ -1,6 +1,7 @@
 # src/gui.py
 import sys
 import os
+import subprocess
 import sqlite3
 from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
@@ -153,8 +154,20 @@ class WarehouseTab(QWidget):
     def __init__(self, db_path):
         super().__init__()
         self.db_path = db_path
+        self.repo_root = self.find_git_root(db_path)
         self.init_ui()
         self.load_data()
+
+    @staticmethod
+    def find_git_root(path):
+        path = os.path.abspath(path)
+        while True:
+            if os.path.exists(os.path.join(path, '.git')):
+                return path
+            parent = os.path.dirname(path)
+            if parent == path:
+                return None
+            path = parent
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -206,6 +219,72 @@ class WarehouseTab(QWidget):
 
         main_layout.addLayout(btn_layout)
         self.setLayout(main_layout)
+
+        git_btn_layout = QHBoxLayout()
+        self.git_pull_btn = QPushButton("Git pull database.db")
+        self.git_pull_btn.clicked.connect(self.git_pull)
+        git_btn_layout.addWidget(self.git_pull_btn)
+
+        self.git_push_btn = QPushButton("Git push database.db")
+        self.git_push_btn.clicked.connect(self.git_push)
+        git_btn_layout.addWidget(self.git_push_btn)
+
+        layout.addLayout(git_btn_layout)
+
+        # Если репозиторий не найден, отключаем кнопки
+        if self.repo_root is None:
+            self.git_pull_btn.setEnabled(False)
+            self.git_push_btn.setEnabled(False)
+            self.git_pull_btn.setToolTip("Git репозиторий не найден")
+            self.git_push_btn.setToolTip("Git репозиторий не найден")
+
+    def git_pull(self):
+        if self.repo_root is None:
+            QMessageBox.critical(self, "Ошибка", "Git репозиторий не найден")
+            return
+
+        try:
+            result = subprocess.run(['git', 'pull', 'origin', 'master'],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30)
+            if result.returncode == 0:
+                QMessageBox.information(self, "Успех", "Склад заполнился актуальными остатками")
+                self.load_data()
+            else:
+                QMessageBox.critical(self, "Ошибка", "Ошибка в проведении операции, проверьте интернет соединение")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка: {str(e)}")
+
+    def git_push(self):
+        if self.repo_root is None:
+            QMessageBox.critical(self, "Ошибка", "Git репозиторий не найден")
+            return
+
+        try:
+            # Добавляем только database.db
+            subprocess.run(['git', 'add', 'data/database.db'],
+                           cwd=self.repo_root,
+                           check=True)
+
+            # Коммитим
+            subprocess.run(['git', 'commit', '-m', 'Update database from application'],
+                           cwd=self.repo_root,
+                           check=True)
+
+            # Пушим
+            result = subprocess.run(['git', 'push', 'origin', 'master'],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30)
+            if result.returncode == 0:
+                QMessageBox.information(self, "Успех", "Файл склада отправлен в репозиторий")
+            else:
+                QMessageBox.critical(self, "Ошибка", "Ошибка в проведении операции, проверьте интернет соединение")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка: {str(e)}")
 
     def load_materials(self):
         """Загружает материалы в выпадающий список"""
