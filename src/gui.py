@@ -273,7 +273,7 @@ class WarehouseTab(QWidget):
             return
 
         try:
-            # Выполняем git pull с принудительным обновлением
+            # Выполняем git fetch
             result = subprocess.run(['git', 'fetch', 'origin'],
                                     cwd=self.repo_root,
                                     capture_output=True,
@@ -285,19 +285,27 @@ class WarehouseTab(QWidget):
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при получении изменений:\n{error_msg}")
                 return
 
+            # Всегда используем фиксированный путь к базе данных в репозитории
+            db_repo_path = 'data/database.db'
+
             # Принудительно сбрасываем файл database.db к версии из удаленного репозитория
-            if self.repo_root:
-                db_relative_path = os.path.relpath(self.db_path, self.repo_root)
-                reset_result = subprocess.run(['git', 'checkout', 'origin/master', '--', db_relative_path],
+            reset_result = subprocess.run(['git', 'checkout', 'origin/master', '--', db_repo_path],
                                           cwd=self.repo_root,
                                           capture_output=True,
                                           text=True,
                                           timeout=30)
 
             if reset_result.returncode == 0:
-                QMessageBox.information(self, "Успех", "Склад заполнился актуальными остатками")
-                # Перезагружаем все вкладки
-                self.main_window.reload_all_tabs()
+                # Копируем обновленный файл из репозитория в папку приложения
+                repo_db_path = os.path.join(self.repo_root, db_repo_path)
+                if os.path.exists(repo_db_path):
+                    import shutil
+                    shutil.copy2(repo_db_path, self.db_path)
+                    QMessageBox.information(self, "Успех", "Склад заполнился актуальными остатками")
+                    # Перезагружаем все вкладки
+                    self.main_window.reload_all_tabs()
+                else:
+                    QMessageBox.critical(self, "Ошибка", "Файл базы данных не найден в репозитории")
             else:
                 error_msg = reset_result.stderr if reset_result.stderr else reset_result.stdout
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при обновлении файла:\n{error_msg}")
@@ -311,12 +319,8 @@ class WarehouseTab(QWidget):
             return
 
         try:
-            # Определяем относительный путь к базе данных в репозитории
-            if getattr(sys, 'frozen', False):
-                db_repo_path = 'data/database.db'
-            else:
-                db_repo_path = os.path.relpath(self.db_path, self.repo_root)
-                db_repo_path = db_repo_path.replace('\\', '/')
+            # Всегда используем фиксированный путь к базе данных в репозитории
+            db_repo_path = 'data/database.db'
 
             # Копируем текущую базу данных в репозиторий
             repo_db_path = os.path.join(self.repo_root, db_repo_path)
@@ -1488,7 +1492,11 @@ class OrdersTab(QWidget):
                 # Добавляем кнопку для открытия PDF
                 if pdf_filename:
                     pdf_btn = QPushButton("Открыть")
-                    pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
+                    # Правильно определяем путь к папке с PDF-файлами
+                    if getattr(sys, 'frozen', False):
+                        pdf_dir = os.path.join(os.path.dirname(sys.executable), 'orders')
+                    else:
+                        pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
                     pdf_path = os.path.join(pdf_dir, pdf_filename)
                     pdf_btn.clicked.connect(lambda checked, path=pdf_path: self.open_pdf(path))
                     self.history_table.setCellWidget(row_idx, 4, pdf_btn)
@@ -1558,15 +1566,16 @@ class OrdersTab(QWidget):
         layout.addWidget(tab_widget)
 
         if pdf_filename:
-            pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
+            # Правильно определяем путь к папке с PDF-файлами
+            if getattr(sys, 'frozen', False):
+                pdf_dir = os.path.join(os.path.dirname(sys.executable), 'orders')
+            else:
+                pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
             pdf_path = os.path.join(pdf_dir, pdf_filename)
 
             pdf_btn = QPushButton("Открыть PDF-отчет")
             pdf_btn.clicked.connect(lambda: self.open_pdf(pdf_path))
             layout.addWidget(pdf_btn)
-
-        dialog.setLayout(layout)
-        dialog.exec_()
 
         # Кнопка закрытия
         close_btn = QPushButton("Закрыть")
