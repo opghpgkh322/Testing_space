@@ -311,10 +311,25 @@ class WarehouseTab(QWidget):
             return
 
         try:
+            # Определяем относительный путь к базе данных в репозитории
+            if getattr(sys, 'frozen', False):
+                db_repo_path = 'data/database.db'
+            else:
+                db_repo_path = os.path.relpath(self.db_path, self.repo_root)
+                db_repo_path = db_repo_path.replace('\\', '/')
+
+            # Копируем текущую базу данных в репозиторий
+            repo_db_path = os.path.join(self.repo_root, db_repo_path)
+            repo_db_dir = os.path.dirname(repo_db_path)
+
+            if not os.path.exists(repo_db_dir):
+                os.makedirs(repo_db_dir)
+
+            import shutil
+            shutil.copy2(self.db_path, repo_db_path)
+
             # Добавляем только database.db
-            if self.repo_root:
-                db_relative_path = os.path.relpath(self.db_path, self.repo_root)
-                add_result = subprocess.run(['git', 'checkout', 'origin/master', '--', db_relative_path],
+            add_result = subprocess.run(['git', 'add', db_repo_path],
                                         cwd=self.repo_root,
                                         capture_output=True,
                                         text=True,
@@ -325,8 +340,19 @@ class WarehouseTab(QWidget):
                 QMessageBox.critical(self, "Ошибка", f"Ошибка при добавлении файла:\n{error_msg}")
                 return
 
-            # Коммитим
-            commit_result = subprocess.run(['git', 'commit', '-m', 'Update database from application'],
+            # Проверяем, есть ли изменения для коммита
+            status_result = subprocess.run(['git', 'status', '--porcelain', db_repo_path],
+                                           cwd=self.repo_root,
+                                           capture_output=True,
+                                           text=True,
+                                           timeout=30)
+
+            if not status_result.stdout.strip():
+                QMessageBox.information(self, "Информация", "Нет изменений в базе данных для коммита")
+                return
+
+            # Коммитим только database.db
+            commit_result = subprocess.run(['git', 'commit', '-m', 'Update database from application', db_repo_path],
                                            cwd=self.repo_root,
                                            capture_output=True,
                                            text=True,
