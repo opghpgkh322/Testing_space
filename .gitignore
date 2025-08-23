@@ -27,11 +27,7 @@ MANIFEST
 *.swo
 *~
 
-# Игнорировать базу данных и сгенерированные файлы
-data/database.db
-data/orders/*.pdf
-dist/
-build/
+
 
 # Игнорировать специфичные для Windows файлы
 Thumbs.db
