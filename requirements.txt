@@ -1,6 +1,2 @@
-PyQt5==5.15.7
-gspread==5.4.0
-google-auth==2.16.0
-google-auth-oauthlib==1.0.0
-google-auth-httplib2==0.1.0
-reportlab==3.6.12
+reportlab~=4.4.3
+PyQt5~=5.15.7

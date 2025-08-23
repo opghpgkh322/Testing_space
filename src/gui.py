@@ -5,6 +5,8 @@ import subprocess
 import sqlite3
 from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
@@ -17,6 +19,17 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QTableWidget
                              QHBoxLayout, QFormLayout, QGroupBox, QSpinBox, QTextEdit, QDialog)
 from PyQt5.QtCore import Qt
 
+try:
+    if getattr(sys, 'frozen', False):
+        # Если приложение запущено как собранный exe
+        font_path = os.path.join(os.path.dirname(sys.executable), 'fonts', 'arial.ttf')
+    else:
+        # Если приложение запущено из исходного кода
+        font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'arial.ttf')
+
+    pdfmetrics.registerFont(TTFont('Arial', font_path))
+except:
+    print("Шрифт Arial не найден, используется стандартный")
 
 class MaterialsTab(QWidget):
     def __init__(self, db_path):
@@ -273,7 +286,9 @@ class WarehouseTab(QWidget):
                 return
 
             # Принудительно сбрасываем файл database.db к версии из удаленного репозитория
-            reset_result = subprocess.run(['git', 'checkout', 'origin/master', '--', 'data/database.db'],
+            if self.repo_root:
+                db_relative_path = os.path.relpath(self.db_path, self.repo_root)
+                reset_result = subprocess.run(['git', 'checkout', 'origin/master', '--', db_relative_path],
                                           cwd=self.repo_root,
                                           capture_output=True,
                                           text=True,
@@ -297,7 +312,9 @@ class WarehouseTab(QWidget):
 
         try:
             # Добавляем только database.db
-            add_result = subprocess.run(['git', 'add', 'data/database.db'],
+            if self.repo_root:
+                db_relative_path = os.path.relpath(self.db_path, self.repo_root)
+                add_result = subprocess.run(['git', 'checkout', 'origin/master', '--', db_relative_path],
                                         cwd=self.repo_root,
                                         capture_output=True,
                                         text=True,
@@ -1135,7 +1152,10 @@ class OrdersTab(QWidget):
             order_id = self._save_order_to_db(total_cost, order_details, instructions_text)
 
             # Генерация PDF
-            pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
+            if getattr(sys, 'frozen', False):
+                pdf_dir = os.path.join(os.path.dirname(sys.executable), 'orders')
+            else:
+                pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
             if not os.path.exists(pdf_dir):
                 os.makedirs(pdf_dir)
 

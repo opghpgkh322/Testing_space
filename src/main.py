@@ -4,10 +4,27 @@ from gui import MainWindow
 from PyQt5.QtWidgets import QApplication
 from database import create_database
 
+
 def get_db_path():
     """Возвращает абсолютный путь к базе данных"""
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, '..', 'data', 'database.db')
+    if getattr(sys, 'frozen', False):
+        # Если приложение запущено как собранный exe
+        base_dir = os.path.dirname(sys.executable)
+        db_path = os.path.join(base_dir, 'data', 'database.db')
+    else:
+        # Если приложение запущено из исходного кода
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        db_path = os.path.join(base_dir, '..', 'data', 'database.db')
+
+    # Преобразуем путь к абсолютному и нормализуем
+    db_path = os.path.abspath(db_path)
+    data_dir = os.path.dirname(db_path)
+
+    # Создаем папку data, если она не существует
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    return db_path
 
 
 if __name__ == "__main__":
