@@ -43,12 +43,12 @@ class MaterialsTab(QWidget):
 
         # Таблица материалов
         self.table = QTableWidget()
-        self.table.setColumnCount(5)  # Исправлено: 5 столбцов для materials (ID, Название, Тип, Цена, Ед. изм.)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["ID", "Название", "Тип", "Цена", "Ед. изм."])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.table)
 
-        # Форма добавления материала
+        # Форма добавления/редактирования материала
         form_layout = QFormLayout()
 
         self.name_input = QLineEdit()
@@ -76,16 +76,144 @@ class MaterialsTab(QWidget):
         self.add_btn.clicked.connect(self.add_material)
         btn_layout.addWidget(self.add_btn)
 
+        self.edit_btn = QPushButton("Редактировать")
+        self.edit_btn.clicked.connect(self.edit_material)
+        btn_layout.addWidget(self.edit_btn)
+
         self.delete_btn = QPushButton("Удалить")
         self.delete_btn.clicked.connect(self.delete_material)
         btn_layout.addWidget(self.delete_btn)
 
-        self.refresh_btn = QPushButton("Обновить")
-        self.refresh_btn.clicked.connect(self.load_data)
-        btn_layout.addWidget(self.refresh_btn)
-
         layout.addLayout(btn_layout)
         self.setLayout(layout)
+
+        # Подключаем обработчик выбора строки в таблице
+        self.table.cellClicked.connect(self.on_table_cell_clicked)
+
+    def on_table_cell_clicked(self, row, column):
+        """Заполняет форму данными выбранного материала"""
+        if row >= 0:
+            material_id = self.table.item(row, 0).text()
+            name = self.table.item(row, 1).text()
+            m_type = self.table.item(row, 2).text()
+            price = self.table.item(row, 3).text()
+            unit = self.table.item(row, 4).text()
+
+            # Сохраняем ID выбранного материала
+            self.selected_material_id = material_id
+
+            # Заполняем форму
+            self.name_input.setText(name)
+            self.type_combo.setCurrentText(m_type)
+            self.price_input.setText(price)
+            self.unit_input.setText(unit)
+
+    def edit_material(self):
+        """Редактирует выбранный материал"""
+        if not hasattr(self, 'selected_material_id'):
+            QMessageBox.warning(self, "Ошибка", "Выберите материал для редактирования")
+            return
+
+        name = self.name_input.text().strip()
+        m_type = self.type_combo.currentText()
+        price = self.price_input.text().strip()
+        unit = self.unit_input.text().strip()
+
+        if not name or not price or not unit:
+            QMessageBox.warning(self, "Ошибка", "Все поля обязательны для заполнения")
+            return
+
+        try:
+            price_val = float(price)
+        except ValueError:
+            QMessageBox.warning(self, "Ошибка", "Цена должна быть числом")
+            return
+
+        # Проверяем, не используется ли это название другим материалом
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM materials WHERE name = ? AND id != ?",
+            (name, self.selected_material_id)
+        )
+        existing = cursor.fetchone()
+
+        if existing:
+            QMessageBox.warning(self, "Ошибка", "Материал с таким названием уже существует")
+            conn.close()
+            return
+
+        # Обновляем материал в базе данных
+        try:
+            cursor.execute(
+                "UPDATE materials SET name = ?, type = ?, price = ?, unit = ? WHERE id = ?",
+                (name, m_type, price_val, unit, self.selected_material_id)
+            )
+            conn.commit()
+
+            # Пересчитываем себестоимость всех изделий, использующих этот материал
+            self.recalculate_products_with_material(self.selected_material_id)
+
+            conn.close()
+
+            self.load_data()  # Перезагружаем таблицу
+            self.clear_form()  # Очищаем форму
+
+            QMessageBox.information(self, "Успех", "Материал обновлен!")
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Ошибка базы данных", f"Ошибка при обновлении материала: {str(e)}")
+        finally:
+            conn.close()
+
+    def recalculate_products_with_material(self, material_id):
+        """Пересчитывает себестоимость изделий, использующих указанный материал"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            # Находим все изделия, которые используют этот материал
+            cursor.execute('''
+                SELECT DISTINCT product_id 
+                FROM product_composition 
+                WHERE material_id = ?
+            ''', (material_id,))
+            product_ids = [row[0] for row in cursor.fetchall()]
+
+            # Для каждого изделия пересчитываем себестоимость
+            for product_id in product_ids:
+                cursor.execute('''
+                    SELECT m.price, pc.quantity, pc.length
+                    FROM product_composition pc
+                    JOIN materials m ON pc.material_id = m.id
+                    WHERE pc.product_id = ?
+                ''', (product_id,))
+                composition = cursor.fetchall()
+
+                total_cost = 0
+                for row in composition:
+                    price, quantity, length = row
+                    if length:  # Для пиломатериалов
+                        total_cost += price * quantity * length
+                    else:  # Для метизов
+                        total_cost += price * quantity
+
+                # Обновляем себестоимость изделия
+                cursor.execute("UPDATE products SET cost = ? WHERE id = ?",
+                               (total_cost, product_id))
+
+            conn.commit()
+        except Exception as e:
+            print(f"Ошибка при пересчете себестоимости: {str(e)}")
+            conn.rollback()
+        finally:
+            conn.close()
+
+    def clear_form(self):
+        """Очищает форму ввода"""
+        self.name_input.clear()
+        self.price_input.clear()
+        self.unit_input.clear()
+        if hasattr(self, 'selected_material_id'):
+            delattr(self, 'selected_material_id')
 
     def load_data(self):
         """Загружает данные материалов"""
@@ -226,10 +354,6 @@ class WarehouseTab(QWidget):
         self.delete_btn = QPushButton("Удалить выбранное")
         self.delete_btn.clicked.connect(self.delete_item)
         btn_layout.addWidget(self.delete_btn)
-
-        self.refresh_btn = QPushButton("Обновить данные")
-        self.refresh_btn.clicked.connect(self.load_data)
-        btn_layout.addWidget(self.refresh_btn)
 
         main_layout.addLayout(btn_layout)
         self.setLayout(main_layout)
@@ -589,6 +713,44 @@ class ProductsTab(QWidget):
         main_layout.addWidget(self.composition_group)
 
         self.setLayout(main_layout)
+
+    def recalculate_all_products_cost(self):
+        """Пересчитывает себестоимость всех изделий"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            # Получаем все изделия
+            cursor.execute("SELECT id FROM products")
+            product_ids = [row[0] for row in cursor.fetchall()]
+
+            for product_id in product_ids:
+                # Рассчитываем себестоимость для каждого изделия
+                cursor.execute('''
+                    SELECT m.price, pc.quantity, pc.length
+                    FROM product_composition pc
+                    JOIN materials m ON pc.material_id = m.id
+                    WHERE pc.product_id = ?
+                ''', (product_id,))
+                composition = cursor.fetchall()
+
+                total_cost = 0
+                for row in composition:
+                    price, quantity, length = row
+                    if length:  # Для пиломатериалов
+                        total_cost += price * quantity * length
+                    else:  # Для метизов
+                        total_cost += price * quantity
+
+                # Обновляем себестоимость изделия
+                cursor.execute("UPDATE products SET cost = ? WHERE id = ?",
+                               (total_cost, product_id))
+
+            conn.commit()
+        except Exception as e:
+            print(f"Ошибка при пересчете себестоимости: {str(e)}")
+            conn.rollback()
+        finally:
+            conn.close()
 
     def load_products(self):
         """Загружает список изделий"""
@@ -1593,6 +1755,14 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Учет деревообрабатывающего цеха")
         self.setGeometry(100, 100, 1000, 800)
 
+        # Создаем кнопку обновления для главного окна
+        self.refresh_btn = QPushButton("Обновить все данные")
+        self.refresh_btn.clicked.connect(self.reload_all_tabs)
+
+        # Размещаем кнопку в правом верхнем углу
+        self.refresh_btn.setFixedSize(150, 30)
+        self.refresh_btn.move(self.width() - 160, 0)
+
         # Создаем вкладки
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -1613,17 +1783,30 @@ class MainWindow(QMainWindow):
         self.orders_tab = OrdersTab(db_path, self)
         self.tabs.addTab(self.orders_tab, "Заказы")
 
+        # Добавляем кнопку обновления поверх вкладок
+        self.refresh_btn.setParent(self)
+        self.refresh_btn.raise_()  # Поднимаем кнопку поверх других элементов
+
         # Статус бар
         self.statusBar().showMessage("Готово")
 
+    def resizeEvent(self, event):
+        """Обработчик изменения размера окна - перемещаем кнопку в правый верхний угол"""
+        super().resizeEvent(event)
+        self.refresh_btn.move(self.width() - 160, 0)
+
     def reload_all_tabs(self):
         """Перезагружает данные во всех вкладках"""
+        # Пересчитываем себестоимость всех изделий
+        self.products_tab.recalculate_all_products_cost()
+
+        # Затем загружаем данные
         self.materials_tab.load_data()
         self.warehouse_tab.load_data()
         self.products_tab.load_products()
-        # Для orders_tab обновляем историю и продукты
         self.orders_tab.load_order_history()
         self.orders_tab.load_products()
+        self.statusBar().showMessage("Данные обновлены", 3000)
 
 
 if __name__ == "__main__":
