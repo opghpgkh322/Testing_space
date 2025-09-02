@@ -137,7 +137,7 @@ class CuttingOptimizer:
         requirements.sort(key=lambda x: x[0], reverse=True)
         instructions = []
         updated = []
-        missing = []
+        missing_dict = defaultdict(float)  # Для сбора общей недостающей длины по изделиям
 
         # Создаем список доступных досок
         boards = []
@@ -177,7 +177,8 @@ class CuttingOptimizer:
                 board_found = True
 
             if not board_found:
-                missing.append(f"{material}: не хватает для изделия '{product}' ({req_length:.2f}м)")
+                # Собираем общую недостающую длину по изделиям
+                missing_dict[product] += req_length
 
         # Формируем инструкции и остатки
         for board in boards:
@@ -205,6 +206,13 @@ class CuttingOptimizer:
 
                 if not found:
                     updated.append([material, current_length_rounded, 1])
+
+        # Формируем сообщения о недостающих материалах с общей длиной
+        missing = []
+        if missing_dict:
+            total_missing = sum(missing_dict.values())
+            products_list = ", ".join([f"'{prod}'" for prod in missing_dict.keys()])
+            missing.append(f"{material}: не хватает {total_missing:.2f}м для изделий {products_list}")
 
         return {
             'success': len(missing) == 0,

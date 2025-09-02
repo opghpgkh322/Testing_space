@@ -620,11 +620,12 @@ class WarehouseTab(QWidget):
 
 
 class ProductsTab(QWidget):
-    def __init__(self, db_path):
+    def __init__(self, db_path, main_window=None):  # Добавляем параметр main_window
         super().__init__()
         self.db_path = db_path
-        self.selected_product_id = None  # Инициализация атрибута
-        self.selected_product_name = None  # Инициализация атрибута
+        self.main_window = main_window  # Сохраняем ссылку на главное окно
+        self.selected_product_id = None
+        self.selected_product_name = None
         self.init_ui()
         self.load_products()
 
@@ -993,6 +994,12 @@ class ProductsTab(QWidget):
                            (total_cost, self.selected_product_id))
             conn.commit()
 
+            # 5. Обновляем кэш стоимости в заказах, если он существует
+            if self.main_window and hasattr(self.main_window, 'orders_tab'):
+                if hasattr(self.main_window.orders_tab, 'product_cost_cache'):
+                    if self.selected_product_id in self.main_window.orders_tab.product_cost_cache:
+                        del self.main_window.orders_tab.product_cost_cache[self.selected_product_id]
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка расчета", f"Произошла ошибка: {str(e)}")
         finally:
@@ -1007,6 +1014,7 @@ class OrdersTab(QWidget):
         self.init_ui()
         self.load_products()
         self.current_order = []  # Хранит текущий заказ: (product_id, quantity)
+        self.product_cost_cache = {}  # Кэш стоимости изделий
 
     def init_ui(self):
         main_layout = QVBoxLayout()
@@ -1130,6 +1138,17 @@ class OrdersTab(QWidget):
         product_name = self.product_combo.currentText()
         quantity = self.quantity_spin.value()
 
+        # Получаем себестоимость изделия (из кэша или базы данных)
+        if product_id in self.product_cost_cache:
+            cost_per_unit = self.product_cost_cache[product_id]
+        else:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT cost FROM products WHERE id = ?", (product_id,))
+            cost_per_unit = cursor.fetchone()[0]
+            conn.close()
+            self.product_cost_cache[product_id] = cost_per_unit  # Сохраняем в кэш
+
         # Проверяем, есть ли уже этот продукт в заказе
         existing_row = -1
         for row in range(self.order_table.rowCount()):
@@ -1143,17 +1162,10 @@ class OrdersTab(QWidget):
             new_quantity = current_quantity + quantity
             self.order_table.item(existing_row, 1).setText(str(new_quantity))
 
-            # Обновляем стоимость
-            cost_per_item = float(self.order_table.item(existing_row, 2).text().replace(' руб', ''))
-            self.order_table.item(existing_row, 2).setText(f"{cost_per_item * new_quantity:.2f} руб")
+            # Пересчитываем стоимость на основе стоимости за единицу
+            new_cost = cost_per_unit * new_quantity
+            self.order_table.item(existing_row, 2).setText(f"{new_cost:.2f} руб")
         else:
-            # Получаем себестоимость изделия
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT cost FROM products WHERE id = ?", (product_id,))
-            cost = cursor.fetchone()[0]
-            conn.close()
-
             # Добавляем новую строку
             row_count = self.order_table.rowCount()
             self.order_table.setRowCount(row_count + 1)
@@ -1164,7 +1176,7 @@ class OrdersTab(QWidget):
             self.order_table.setItem(row_count, 0, item)
 
             self.order_table.setItem(row_count, 1, QTableWidgetItem(str(quantity)))
-            self.order_table.setItem(row_count, 2, QTableWidgetItem(f"{cost * quantity:.2f} руб"))
+            self.order_table.setItem(row_count, 2, QTableWidgetItem(f"{cost_per_unit * quantity:.2f} руб"))
 
         # Обновляем текущий заказ
         self.current_order = []
@@ -1245,26 +1257,26 @@ class OrdersTab(QWidget):
             unit = "м" if material_types.get(material) == "Пиломатериал" else "шт"
             materials_message += f"▫️ {material}: {amount:.2f} {unit}\n"
 
-        # Формируем сообщение о доступности материалов
-        if result['can_produce']:
-            availability_message = "\n✅ Материалов достаточно для производства"
-        else:
-            availability_message = "\n❌ Материалов недостаточно:\n"
-            # Группируем ошибки по материалам для лучшей читаемости
-            material_errors = defaultdict(list)
-            for error in result['missing']:
-                # Извлекаем название материала из сообщения об ошибке
-                if ":" in error:
-                    material = error.split(":")[0]
-                    material_errors[material].append(error)
+            # Формируем сообщение о доступности материалов
+            if result['can_produce']:
+                availability_message = "\n✅ Материалов достаточно для производства"
+            else:
+                availability_message = "\n❌ Материалов недостаточно:\n"
+                # Группируем ошибки по материалам для лучшей читаемости
+                material_errors = defaultdict(list)
+                for error in result['missing']:
+                    # Извлекаем название материала из сообщения об ошибке
+                    if ":" in error:
+                        material = error.split(":")[0]
+                        material_errors[material].append(error)
 
-            # Формируем сообщение с группировкой по материалам
-            for material, errors in material_errors.items():
-                availability_message += f"\n   {material}:\n"
-                for error in errors:
-                    # Убираем название материала из каждого сообщения, так как оно уже указано
-                    error_msg = error.split(":", 1)[1] if ":" in error else error
-                    availability_message += f"      -{error_msg.strip()}\n"
+                # Формируем сообщение с группировкой по материалам
+                for material, errors in material_errors.items():
+                    availability_message += f"\n   {material}:\n"
+                    for error in errors:
+                        # Убираем название материала из каждого сообщения, так как оно уже указано
+                        error_msg = error.split(":", 1)[1] if ":" in error else error
+                        availability_message += f"      -{error_msg.strip()}\n"
 
         instructions = "📊 Расчет заказа:\n\n"
         instructions += f"💰 Себестоимость: {total_cost:.2f} руб\n"
@@ -1769,7 +1781,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.warehouse_tab, "Склад")
 
         # Вкладка изделий
-        self.products_tab = ProductsTab(db_path)
+        self.products_tab = ProductsTab(db_path, self)  # Передаем ссылку на главное окно
         self.tabs.addTab(self.products_tab, "Изделия")
 
         # Вкладка заказов
