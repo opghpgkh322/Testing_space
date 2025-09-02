@@ -41,12 +41,39 @@ class CuttingOptimizer:
         # Получаем типы материалов из БД
         material_types = CuttingOptimizer._get_material_types(db_path)
 
+        # Проверяем наличие всех требуемых материалов
+        for material in requirements.keys():
+            # Если материала нет на складе или его количество равно 0
+            if material not in warehouse or not warehouse[material]:
+                # Получаем общее количество этого материала на складе (включая нулевые)
+                total_available = sum(item[2] for item in stock_items if item[0] == material)
+
+                # Рассчитываем общее требуемое количество
+                total_required = sum(req[0] for req in requirements[material])
+
+                if total_available < total_required:
+                    missing_materials.append(f"{material}: требуется {total_required}, доступно {total_available}")
+                    can_produce = False
+                # Если материал есть, но количество равно 0
+                elif total_available == 0:
+                    missing_materials.append(f"{material}: отсутствует на складе")
+                    can_produce = False
+
+        # Если нельзя произвести из-за отсутствия материалов, возвращаем результат
+        if not can_produce:
+            return {
+                'can_produce': False,
+                'missing': missing_materials,
+                'updated_warehouse': [],
+                'cutting_instructions': {}
+            }
+
+        # Обрабатываем каждый материал
         for material, req_list in requirements.items():
             print(f"[DEBUG] Обрабатываем материал: {material}, требования: {req_list}")
 
-            if material not in warehouse:
-                missing_materials.append(f"{material}: отсутствует на складе")
-                can_produce = False
+            if material not in warehouse or not warehouse[material]:
+                # Этот случай уже обработан выше, пропускаем
                 continue
 
             if material_types.get(material) == "Метиз":
@@ -73,7 +100,7 @@ class CuttingOptimizer:
         # Добавляем материалы, не участвовавшие в заказе
         processed_materials = set(requirements.keys())
         for mat, length, qty in stock_items:
-            if mat not in processed_materials:
+            if mat not in processed_materials and qty > 0:
                 updated_warehouse.append([mat, length, qty])
 
         # Округление всех длин до 2 знаков

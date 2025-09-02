@@ -1246,42 +1246,12 @@ class OrdersTab(QWidget):
             materials_message += f"▫️ {material}: {amount:.2f} {unit}\n"
 
         # Формируем сообщение о доступности материалов
-        availability_message = "\n✅ Материалов достаточно для производства"
-
-        # Анализируем недостающие материалы
-        if not result['can_produce']:
-            # Группируем недостающие материалы по типам и суммируем количества
-            missing_summary = defaultdict(float)
-            material_types = CuttingOptimizer._get_material_types(self.db_path)
-
-            for error_msg in result['missing']:
-                # Парсим сообщение об ошибке для извлечения информации о материале и количестве
-                parts = error_msg.split(':')
-                if len(parts) >= 2:
-                    material_name = parts[0].strip()
-                    error_text = parts[1].strip()
-
-                    # Для пиломатериалов ищем значение в метрах
-                    if material_types.get(material_name) == "Пиломатериал":
-                        import re
-                        meter_match = re.search(r'(\d+\.\d+)\s*м', error_text)
-                        if meter_match:
-                            missing_amount = float(meter_match.group(1))
-                            missing_summary[material_name] += missing_amount
-                    # Для метизов ищем количество
-                    else:
-                        import re
-                        count_match = re.search(r'требуется\s*(\d+)', error_text)
-                        if count_match:
-                            missing_amount = int(count_match.group(1))
-                            missing_summary[material_name] += missing_amount
-
-            # Формируем сообщение о недостающих материалах
-            if missing_summary:
-                availability_message = "\n❌ Материалов недостаточно:\n"
-                for material, amount in missing_summary.items():
-                    unit = "м" if material_types.get(material) == "Пиломатериал" else "шт"
-                    availability_message += f"   - {material}: не хватает {amount:.2f} {unit}\n"
+        if result['can_produce']:
+            availability_message = "\n✅ Материалов достаточно для производства"
+        else:
+            availability_message = "\n❌ Материалов недостаточно:\n"
+            for error in result['missing']:
+                availability_message += f"   - {error}\n"
 
         instructions = "📊 Расчет заказа:\n\n"
         instructions += f"💰 Себестоимость: {total_cost:.2f} руб\n"
