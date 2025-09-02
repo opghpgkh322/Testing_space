@@ -1250,8 +1250,21 @@ class OrdersTab(QWidget):
             availability_message = "\n✅ Материалов достаточно для производства"
         else:
             availability_message = "\n❌ Материалов недостаточно:\n"
+            # Группируем ошибки по материалам для лучшей читаемости
+            material_errors = defaultdict(list)
             for error in result['missing']:
-                availability_message += f"   - {error}\n"
+                # Извлекаем название материала из сообщения об ошибке
+                if ":" in error:
+                    material = error.split(":")[0]
+                    material_errors[material].append(error)
+
+            # Формируем сообщение с группировкой по материалам
+            for material, errors in material_errors.items():
+                availability_message += f"\n   {material}:\n"
+                for error in errors:
+                    # Убираем название материала из каждого сообщения, так как оно уже указано
+                    error_msg = error.split(":", 1)[1] if ":" in error else error
+                    availability_message += f"      -{error_msg.strip()}\n"
 
         instructions = "📊 Расчет заказа:\n\n"
         instructions += f"💰 Себестоимость: {total_cost:.2f} руб\n"

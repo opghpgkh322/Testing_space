@@ -59,21 +59,12 @@ class CuttingOptimizer:
                     missing_materials.append(f"{material}: отсутствует на складе")
                     can_produce = False
 
-        # Если нельзя произвести из-за отсутствия материалов, возвращаем результат
-        if not can_produce:
-            return {
-                'can_produce': False,
-                'missing': missing_materials,
-                'updated_warehouse': [],
-                'cutting_instructions': {}
-            }
-
         # Обрабатываем каждый материал
         for material, req_list in requirements.items():
             print(f"[DEBUG] Обрабатываем материал: {material}, требования: {req_list}")
 
+            # Пропускаем материалы, которых нет на складе
             if material not in warehouse or not warehouse[material]:
-                # Этот случай уже обработан выше, пропускаем
                 continue
 
             if material_types.get(material) == "Метиз":
