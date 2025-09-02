@@ -23,6 +23,9 @@ class CuttingOptimizer:
         warehouse = defaultdict(list)
         for item in stock_items:
             material_name = item[0]
+            # Пропускаем материалы с нулевым количеством
+            if item[2] <= 0:
+                continue
             warehouse[material_name].append({
                 'length': item[1],
                 'quantity': item[2],

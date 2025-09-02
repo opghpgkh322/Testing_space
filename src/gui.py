@@ -219,7 +219,7 @@ class MaterialsTab(QWidget):
         """Загружает данные материалов"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute('SELECT id, name, type, price, unit FROM materials')
+        cursor.execute('SELECT id, name, type, price, unit FROM materials ORDER BY name')
         materials = cursor.fetchall()
         conn.close()
 
@@ -258,6 +258,11 @@ class MaterialsTab(QWidget):
             )
             conn.commit()
             conn.close()
+
+            # Обновляем все выпадающие списки в главном окне
+            if hasattr(self, 'main_window_ref'):
+                self.main_window_ref.update_all_comboboxes()
+
             self.load_data()  # Перезагружаем таблицу
             self.name_input.clear()
             self.price_input.clear()
@@ -492,7 +497,7 @@ class WarehouseTab(QWidget):
                 return
 
             # Пушим
-            push_result = subprocess.run(['git', 'push', 'origin', 'master'],
+            push_result = subprocess.run(['git', 'push', 'origin', 'master', '--force'],
                                          cwd=self.repo_root,
                                          capture_output=True,
                                          text=True,
@@ -527,6 +532,7 @@ class WarehouseTab(QWidget):
             SELECT w.id, m.name, w.length, w.quantity 
             FROM warehouse w
             JOIN materials m ON w.material_id = m.id
+            ORDER BY m.name
         ''')
         warehouse = cursor.fetchall()
         conn.close()
@@ -756,7 +762,7 @@ class ProductsTab(QWidget):
         """Загружает список изделий"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, cost FROM products")  # Добавлен cost
+        cursor.execute("SELECT id, name, cost FROM products ORDER BY name")
         products = cursor.fetchall()
         conn.close()
 
@@ -803,7 +809,7 @@ class ProductsTab(QWidget):
         """Загружает материалы в выпадающий список"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, type FROM materials")
+        cursor.execute("SELECT id, name, type FROM materials ORDER BY name")
         materials = cursor.fetchall()
         conn.close()
 
@@ -1767,8 +1773,12 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
+        # Подключаем сигнал переключения вкладок
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
         # Вкладка материалов
         self.materials_tab = MaterialsTab(db_path)
+        self.materials_tab.main_window_ref = self  # Добавляем ссылку на главное окно
         self.tabs.addTab(self.materials_tab, "Материалы")
 
         # Вкладка склада
@@ -1789,6 +1799,23 @@ class MainWindow(QMainWindow):
 
         # Статус бар
         self.statusBar().showMessage("Готово")
+
+    def on_tab_changed(self, index):
+        """Обновляет данные при переключении вкладок"""
+        tab_name = self.tabs.tabText(index)
+
+        if tab_name == "Склад":
+            self.warehouse_tab.load_materials()
+        elif tab_name == "Изделия":
+            self.products_tab.load_materials()
+        elif tab_name == "Заказы":
+            self.orders_tab.load_products()
+
+    def update_all_comboboxes(self):
+        """Обновляет все выпадающие списки во вкладках"""
+        self.warehouse_tab.load_materials()
+        self.products_tab.load_materials()
+        self.orders_tab.load_products()
 
     def resizeEvent(self, event):
         """Обработчик изменения размера окна - перемещаем кнопку в правый верхний угол"""
