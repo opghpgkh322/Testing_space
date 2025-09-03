@@ -43,8 +43,8 @@ class MaterialsTab(QWidget):
 
         # Таблица материалов
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["ID", "Название", "Тип", "Цена", "Ед. изм."])
+        self.table.setColumnCount(4)  # Уменьшили количество столбцов на 1 (убрали единицы измерения)
+        self.table.setHorizontalHeaderLabels(["ID", "Название", "Тип", "Цена"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.table)
 
@@ -57,15 +57,16 @@ class MaterialsTab(QWidget):
 
         self.type_combo = QComboBox()
         self.type_combo.addItems(["Пиломатериал", "Метиз"])
+        self.type_combo.currentTextChanged.connect(self.on_type_changed)
         form_layout.addRow(QLabel("Тип:"), self.type_combo)
 
         self.price_input = QLineEdit()
         self.price_input.setPlaceholderText("5.00")
         form_layout.addRow(QLabel("Цена:"), self.price_input)
 
-        self.unit_input = QLineEdit()
-        self.unit_input.setPlaceholderText("м или шт")
-        form_layout.addRow(QLabel("Ед. изм:"), self.unit_input)
+        # Метка для отображения единиц измерения
+        self.unit_label = QLabel("м")  # По умолчанию для пиломатериалов
+        form_layout.addRow(QLabel("Ед. изм:"), self.unit_label)
 
         layout.addLayout(form_layout)
 
@@ -90,23 +91,38 @@ class MaterialsTab(QWidget):
         # Подключаем обработчик выбора строки в таблице
         self.table.cellClicked.connect(self.on_table_cell_clicked)
 
+    def on_type_changed(self, material_type):
+        """Автоматически устанавливает единицы измерения в зависимости от типа материала"""
+        if material_type == "Пиломатериал":
+            self.unit_label.setText("м")
+        else:  # Метиз
+            self.unit_label.setText("шт")
+
     def on_table_cell_clicked(self, row, column):
         """Заполняет форму данными выбранного материала"""
-        if row >= 0:
-            material_id = self.table.item(row, 0).text()
-            name = self.table.item(row, 1).text()
-            m_type = self.table.item(row, 2).text()
-            price = self.table.item(row, 3).text()
-            unit = self.table.item(row, 4).text()
+        try:
+            if row >= 0 and self.table.item(row, 0) is not None:
+                material_id = self.table.item(row, 0).text()
+                name = self.table.item(row, 1).text()
+                m_type = self.table.item(row, 2).text()
+                price = self.table.item(row, 3).text()
 
-            # Сохраняем ID выбранного материала
-            self.selected_material_id = material_id
+                # Сохраняем ID выбранного материала
+                self.selected_material_id = material_id
 
-            # Заполняем форму
-            self.name_input.setText(name)
-            self.type_combo.setCurrentText(m_type)
-            self.price_input.setText(price)
-            self.unit_input.setText(unit)
+                # Заполняем форму
+                self.name_input.setText(name)
+                self.type_combo.setCurrentText(m_type)
+                self.price_input.setText(price)
+
+                # Автоматически устанавливаем единицы измерения в зависимости от типа
+                if m_type == "Пиломатериал":
+                    self.unit_label.setText("м")
+                else:  # Метиз
+                    self.unit_label.setText("шт")
+        except Exception as e:
+            print(f"Ошибка при выборе материала: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка при выборе материала: {str(e)}")
 
     def edit_material(self):
         """Редактирует выбранный материал"""
@@ -117,10 +133,10 @@ class MaterialsTab(QWidget):
         name = self.name_input.text().strip()
         m_type = self.type_combo.currentText()
         price = self.price_input.text().strip()
-        unit = self.unit_input.text().strip()
+        unit = self.unit_label.text()  # Используем автоматически установленную единицу
 
-        if not name or not price or not unit:
-            QMessageBox.warning(self, "Ошибка", "Все поля обязательны для заполнения")
+        if not name or not price:
+            QMessageBox.warning(self, "Ошибка", "Название и цена обязательны для заполнения")
             return
 
         try:
@@ -156,9 +172,8 @@ class MaterialsTab(QWidget):
 
             conn.close()
 
-            self.load_data()  # Перезагружаем таблицу
-            self.clear_form()  # Очищаем форму
-
+            self.load_data()
+            self.clear_form()
             QMessageBox.information(self, "Успех", "Материал обновлен!")
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Ошибка базы данных", f"Ошибка при обновлении материала: {str(e)}")
@@ -219,7 +234,7 @@ class MaterialsTab(QWidget):
         """Загружает данные материалов"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute('SELECT id, name, type, price, unit FROM materials ORDER BY name')
+        cursor.execute('SELECT id, name, type, price FROM materials')  # Убрали unit из запроса
         materials = cursor.fetchall()
         conn.close()
 
@@ -237,10 +252,10 @@ class MaterialsTab(QWidget):
         name = self.name_input.text().strip()
         m_type = self.type_combo.currentText()
         price = self.price_input.text().strip()
-        unit = self.unit_input.text().strip()
+        unit = self.unit_label.text()  # Используем автоматически установленную единицу
 
-        if not name or not price or not unit:
-            QMessageBox.warning(self, "Ошибка", "Все поля обязательны для заполнения")
+        if not name or not price:
+            QMessageBox.warning(self, "Ошибка", "Название и цена обязательны для заполнения")
             return
 
         try:
@@ -258,15 +273,9 @@ class MaterialsTab(QWidget):
             )
             conn.commit()
             conn.close()
-
-            # Обновляем все выпадающие списки в главном окне
-            if hasattr(self, 'main_window_ref'):
-                self.main_window_ref.update_all_comboboxes()
-
-            self.load_data()  # Перезагружаем таблицу
+            self.load_data()
             self.name_input.clear()
             self.price_input.clear()
-            self.unit_input.clear()
             QMessageBox.information(self, "Успех", "Материал добавлен!")
         except sqlite3.IntegrityError:
             QMessageBox.warning(self, "Ошибка", "Материал с таким названием уже существует")
@@ -1025,9 +1034,10 @@ class OrdersTab(QWidget):
 
         # Таблица текущего заказа
         self.order_table = QTableWidget()
-        self.order_table.setColumnCount(3)
-        self.order_table.setHorizontalHeaderLabels(["Изделие", "Количество", "Себестоимость"])
+        self.order_table.setColumnCount(4)
+        self.order_table.setHorizontalHeaderLabels(["Изделие", "Количество", "Себестоимость", "Действия"])
         self.order_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.order_table.cellDoubleClicked.connect(self.on_cell_double_clicked)  # Добавляем обработчик
         order_layout.addWidget(self.order_table)
 
         # Форма добавления позиции
@@ -1099,6 +1109,66 @@ class OrdersTab(QWidget):
         main_layout.addWidget(history_group)
 
         self.setLayout(main_layout)
+
+    def on_cell_double_clicked(self, row, column):
+        """Обработка двойного клика по ячейке для редактирования количества"""
+        if column == 1:  # Столбец с количеством
+            # Создаем диалог для изменения количества
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Изменение количества")
+            dialog.setFixedSize(300, 150)
+
+            layout = QVBoxLayout()
+
+            product_name = self.order_table.item(row, 0).text()
+            layout.addWidget(QLabel(f"Изделие: {product_name}"))
+
+            spin_box = QSpinBox()
+            spin_box.setMinimum(1)
+            spin_box.setMaximum(999)
+            spin_box.setValue(int(self.order_table.item(row, 1).text()))
+            layout.addWidget(QLabel("Новое количество:"))
+            layout.addWidget(spin_box)
+
+            btn_layout = QHBoxLayout()
+            ok_btn = QPushButton("OK")
+            cancel_btn = QPushButton("Отмена")
+
+            ok_btn.clicked.connect(dialog.accept)
+            cancel_btn.clicked.connect(dialog.reject)
+
+            btn_layout.addWidget(ok_btn)
+            btn_layout.addWidget(cancel_btn)
+            layout.addLayout(btn_layout)
+
+            dialog.setLayout(layout)
+
+            if dialog.exec_() == QDialog.Accepted:
+                new_quantity = spin_box.value()
+                self.order_table.item(row, 1).setText(str(new_quantity))
+
+                # Пересчитываем стоимость
+                product_id = int(self.order_table.item(row, 0).data(Qt.UserRole))
+                cost_per_unit = self.product_cost_cache.get(product_id)
+                if not cost_per_unit:
+                    conn = sqlite3.connect(self.db_path)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT cost FROM products WHERE id = ?", (product_id,))
+                    cost_per_unit = cursor.fetchone()[0]
+                    conn.close()
+                    self.product_cost_cache[product_id] = cost_per_unit
+
+                new_cost = cost_per_unit * new_quantity
+                self.order_table.item(row, 2).setText(f"{new_cost:.2f} руб")
+
+                # Обновляем текущий заказ и общую стоимость
+                self.current_order = []
+                for r in range(self.order_table.rowCount()):
+                    pid = int(self.order_table.item(r, 0).data(Qt.UserRole))
+                    qty = int(self.order_table.item(r, 1).text())
+                    self.current_order.append((pid, qty))
+
+                self.update_total_cost()
 
     def open_pdf(self, pdf_path):
         """Открывает PDF-файл с помощью стандартного приложения системы"""
@@ -1178,6 +1248,11 @@ class OrdersTab(QWidget):
             self.order_table.setItem(row_count, 1, QTableWidgetItem(str(quantity)))
             self.order_table.setItem(row_count, 2, QTableWidgetItem(f"{cost_per_unit * quantity:.2f} руб"))
 
+            # Добавляем кнопку удаления
+            delete_btn = QPushButton("Удалить")
+            delete_btn.clicked.connect(lambda: self.remove_from_order(row_count))
+            self.order_table.setCellWidget(row_count, 3, delete_btn)
+
         # Обновляем текущий заказ
         self.current_order = []
         for row in range(self.order_table.rowCount()):
@@ -1187,6 +1262,30 @@ class OrdersTab(QWidget):
 
         # Обновляем итоговую стоимость
         self.update_total_cost()
+
+    def remove_from_order(self, row):
+        """Удаляет позицию из заказа"""
+        if row < 0 or row >= self.order_table.rowCount():
+            return
+
+        # Удаляем строку из таблицы
+        self.order_table.removeRow(row)
+
+        # Обновляем текущий заказ
+        self.current_order = []
+        for row in range(self.order_table.rowCount()):
+            product_id = int(self.order_table.item(row, 0).data(Qt.UserRole))
+            quantity = int(self.order_table.item(row, 1).text())
+            self.current_order.append((product_id, quantity))
+
+        # Обновляем итоговую стоимость
+        self.update_total_cost()
+
+        # Обновляем кнопки удаления (их индексы изменились)
+        for row in range(self.order_table.rowCount()):
+            delete_btn = QPushButton("Удалить")
+            delete_btn.clicked.connect(lambda checked, r=row: self.remove_from_order(r))
+            self.order_table.setCellWidget(row, 3, delete_btn)
 
     def update_total_cost(self):
         """Пересчитывает общую стоимость заказа"""
