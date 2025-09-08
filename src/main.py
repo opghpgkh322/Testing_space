@@ -1,3 +1,4 @@
+# main.py - исправленная версия без тестовых этапов
 import sys
 import os
 from gui import MainWindow
@@ -37,6 +38,9 @@ if __name__ == "__main__":
         os.makedirs(data_dir)
 
     create_database(db_path)
+
+    # ИСПРАВЛЕНИЕ 1: Убрано создание тестовых этапов
+    # initialize_stages_data(db_path) - УДАЛЕНО
 
     window = MainWindow(db_path)
     window.show()
