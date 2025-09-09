@@ -3,6 +3,7 @@ import sys
 import os
 import subprocess
 import sqlite3
+import platform
 from reportlab.lib import colors
 from reportlab.platypus import Table, TableStyle
 from reportlab.pdfbase import pdfmetrics
@@ -14,20 +15,38 @@ from datetime import datetime
 from cutting_optimizer import CuttingOptimizer
 from collections import defaultdict
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QTableWidget,
-                           QTableWidgetItem, QPushButton, QVBoxLayout, QWidget,
-                           QHeaderView, QMessageBox, QLabel, QLineEdit, QComboBox,
-                           QHBoxLayout, QFormLayout, QGroupBox, QSpinBox, QTextEdit, 
-                           QDialog, QSplitter)
+                            QTableWidgetItem, QPushButton, QVBoxLayout, QWidget,
+                            QHeaderView, QMessageBox, QLabel, QLineEdit, QComboBox,
+                            QHBoxLayout, QFormLayout, QGroupBox, QSpinBox, QTextEdit, 
+                            QDialog, QSplitter)
 from PyQt5.QtCore import Qt
 
-try:
-    if getattr(sys, 'frozen', False):
-        font_path = os.path.join(os.path.dirname(sys.executable), 'fonts', 'arial.ttf')
-    else:
-        font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'arial.ttf')
-    pdfmetrics.registerFont(TTFont('Arial', font_path))
-except:
-    print("Шрифт Arial не найден, используется стандартный")
+# ИСПРАВЛЕНИЕ 1: Улучшенная регистрация шрифта Arial
+ARIAL_FONT_REGISTERED = False
+
+def setup_arial_font():
+    global ARIAL_FONT_REGISTERED
+    try:
+        if getattr(sys, 'frozen', False):
+            font_path = os.path.join(os.path.dirname(sys.executable), 'fonts', 'arial.ttf')
+        else:
+            font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'arial.ttf')
+        
+        print(f"Попытка загрузить шрифт: {font_path}")
+        
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('Arial', font_path))
+            ARIAL_FONT_REGISTERED = True
+            print("✓ Шрифт Arial успешно зарегистрирован")
+        else:
+            print(f"✗ Файл шрифта не найден: {font_path}")
+            ARIAL_FONT_REGISTERED = False
+    except Exception as e:
+        print(f"✗ Ошибка регистрации шрифта Arial: {e}")
+        ARIAL_FONT_REGISTERED = False
+
+# Вызываем функцию регистрации
+setup_arial_font()
 
 
 # ИСПРАВЛЕННЫЙ КЛАСС ЭТАПОВ С РЕДАКТИРОВАНИЕМ СОСТАВА
@@ -340,10 +359,10 @@ class StagesTab(QWidget):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT sp.id, p.name, sp.quantity, (p.cost * sp.quantity) as total_cost
-            FROM stage_products sp
-            JOIN products p ON sp.product_id = p.id
-            WHERE sp.stage_id = ?
+        SELECT sp.id, p.name, sp.quantity, (p.cost * sp.quantity) as total_cost
+        FROM stage_products sp
+        JOIN products p ON sp.product_id = p.id
+        WHERE sp.stage_id = ?
         """, (self.selected_stage_id,))
         stage_products = cursor.fetchall()
         conn.close()
@@ -383,15 +402,15 @@ class StagesTab(QWidget):
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT sm.id, m.name, m.type, sm.quantity, sm.length, m.price,
-                   CASE 
-                       WHEN m.type = 'Пиломатериал' AND sm.length IS NOT NULL 
-                       THEN (m.price * sm.quantity * sm.length)
-                       ELSE (m.price * sm.quantity)
-                   END as total_cost
-            FROM stage_materials sm
-            JOIN materials m ON sm.material_id = m.id
-            WHERE sm.stage_id = ?
+        SELECT sm.id, m.name, m.type, sm.quantity, sm.length, m.price,
+        CASE 
+        WHEN m.type = 'Пиломатериал' AND sm.length IS NOT NULL 
+        THEN (m.price * sm.quantity * sm.length)
+        ELSE (m.price * sm.quantity)
+        END as total_cost
+        FROM stage_materials sm
+        JOIN materials m ON sm.material_id = m.id
+        WHERE sm.stage_id = ?
         """, (self.selected_stage_id,))
         stage_materials = cursor.fetchall()
         conn.close()
@@ -444,19 +463,19 @@ class StagesTab(QWidget):
         try:
             # Стоимость изделий в этапе
             cursor.execute("""
-                SELECT SUM(p.cost * sp.quantity) as products_cost
-                FROM stage_products sp
-                JOIN products p ON sp.product_id = p.id
-                WHERE sp.stage_id = ?
+            SELECT SUM(p.cost * sp.quantity) as products_cost
+            FROM stage_products sp
+            JOIN products p ON sp.product_id = p.id
+            WHERE sp.stage_id = ?
             """, (self.selected_stage_id,))
             products_cost = cursor.fetchone()[0] or 0
 
             # Правильный расчет стоимости материалов
             cursor.execute("""
-                SELECT sm.quantity, sm.length, m.price, m.type
-                FROM stage_materials sm
-                JOIN materials m ON sm.material_id = m.id
-                WHERE sm.stage_id = ?
+            SELECT sm.quantity, sm.length, m.price, m.type
+            FROM stage_materials sm
+            JOIN materials m ON sm.material_id = m.id
+            WHERE sm.stage_id = ?
             """, (self.selected_stage_id,))
 
             materials_cost = 0
@@ -697,18 +716,18 @@ class StagesTab(QWidget):
 
             for stage_id in stage_ids:
                 cursor.execute("""
-                    SELECT SUM(p.cost * sp.quantity) as products_cost
-                    FROM stage_products sp
-                    JOIN products p ON sp.product_id = p.id
-                    WHERE sp.stage_id = ?
+                SELECT SUM(p.cost * sp.quantity) as products_cost
+                FROM stage_products sp
+                JOIN products p ON sp.product_id = p.id
+                WHERE sp.stage_id = ?
                 """, (stage_id,))
                 products_cost = cursor.fetchone()[0] or 0
 
                 cursor.execute("""
-                    SELECT sm.quantity, sm.length, m.price, m.type
-                    FROM stage_materials sm
-                    JOIN materials m ON sm.material_id = m.id
-                    WHERE sm.stage_id = ?
+                SELECT sm.quantity, sm.length, m.price, m.type
+                FROM stage_materials sm
+                JOIN materials m ON sm.material_id = m.id
+                WHERE sm.stage_id = ?
                 """, (stage_id,))
 
                 materials_cost = 0
@@ -859,9 +878,9 @@ class MaterialsTab(QWidget):
 
             for product_id in product_ids:
                 cursor.execute("""SELECT m.price, pc.quantity, pc.length
-                                FROM product_composition pc
-                                JOIN materials m ON pc.material_id = m.id
-                                WHERE pc.product_id = ?""", (product_id,))
+                FROM product_composition pc
+                JOIN materials m ON pc.material_id = m.id
+                WHERE pc.product_id = ?""", (product_id,))
                 composition = cursor.fetchall()
 
                 total_cost = 0
@@ -1133,9 +1152,9 @@ class WarehouseTab(QWidget):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("""SELECT w.id, m.name, w.length, w.quantity 
-                        FROM warehouse w
-                        JOIN materials m ON w.material_id = m.id
-                        ORDER BY m.name""")
+        FROM warehouse w
+        JOIN materials m ON w.material_id = m.id
+        ORDER BY m.name""")
         warehouse = cursor.fetchall()
         conn.close()
 
@@ -1304,9 +1323,9 @@ class ProductsTab(QWidget):
 
             for product_id in product_ids:
                 cursor.execute("""SELECT m.price, pc.quantity, pc.length
-                                FROM product_composition pc
-                                JOIN materials m ON pc.material_id = m.id
-                                WHERE pc.product_id = ?""", (product_id,))
+                FROM product_composition pc
+                JOIN materials m ON pc.material_id = m.id
+                WHERE pc.product_id = ?""", (product_id,))
                 composition = cursor.fetchall()
 
                 total_cost = 0
@@ -1378,9 +1397,9 @@ class ProductsTab(QWidget):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("""SELECT pc.id, m.name, m.type, pc.quantity, pc.length 
-                        FROM product_composition pc
-                        JOIN materials m ON pc.material_id = m.id
-                        WHERE pc.product_id = ?""", (self.selected_product_id,))
+        FROM product_composition pc
+        JOIN materials m ON pc.material_id = m.id
+        WHERE pc.product_id = ?""", (self.selected_product_id,))
         composition = cursor.fetchall()
         conn.close()
 
@@ -1507,9 +1526,9 @@ class ProductsTab(QWidget):
 
         try:
             cursor.execute("""SELECT m.price, pc.quantity, pc.length
-                            FROM product_composition pc
-                            JOIN materials m ON pc.material_id = m.id
-                            WHERE pc.product_id = ?""", (self.selected_product_id,))
+            FROM product_composition pc
+            JOIN materials m ON pc.material_id = m.id
+            WHERE pc.product_id = ?""", (self.selected_product_id,))
             composition = cursor.fetchall()
 
             total_cost = 0
@@ -1614,7 +1633,7 @@ class OrdersTab(QWidget):
         order_group.setLayout(order_layout)
         main_layout.addWidget(order_group)
 
-        # История заказов
+        # История заказов - ИСПРАВЛЕНИЕ: Добавляем кнопки PDF
         history_group = QGroupBox("История заказов")
         history_layout = QVBoxLayout()
 
@@ -1624,6 +1643,20 @@ class OrdersTab(QWidget):
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.history_table.cellDoubleClicked.connect(self.show_order_details)
         history_layout.addWidget(self.history_table)
+
+        # ИСПРАВЛЕНИЕ: Добавляем кнопки для работы с PDF
+        history_buttons_layout = QHBoxLayout()
+
+        self.open_pdf_btn = QPushButton("Открыть PDF")
+        self.open_pdf_btn.clicked.connect(self.open_selected_pdf)
+        history_buttons_layout.addWidget(self.open_pdf_btn)
+
+        self.refresh_history_btn = QPushButton("Обновить историю")
+        self.refresh_history_btn.clicked.connect(self.load_order_history)
+        history_buttons_layout.addWidget(self.refresh_history_btn)
+
+        history_buttons_layout.addStretch()  # Добавляем пружину для выравнивания
+        history_layout.addLayout(history_buttons_layout)
 
         history_group.setLayout(history_layout)
         main_layout.addWidget(history_group)
@@ -1867,9 +1900,9 @@ class OrdersTab(QWidget):
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 cursor.execute("""SELECT m.name, pc.quantity, pc.length, m.type
-                                FROM product_composition pc
-                                JOIN materials m ON pc.material_id = m.id
-                                WHERE pc.product_id = ?""", (item_id,))
+                FROM product_composition pc
+                JOIN materials m ON pc.material_id = m.id
+                WHERE pc.product_id = ?""", (item_id,))
 
                 for name, comp_quantity, length, mtype in cursor.fetchall():
                     if mtype == "Пиломатериал" and length:
@@ -1922,11 +1955,11 @@ class OrdersTab(QWidget):
 
         # Материалы из изделий в этапе
         cursor.execute("""
-            SELECT m.name, m.type, pc.quantity, pc.length, sp.quantity as stage_qty
-            FROM stage_products sp
-            JOIN product_composition pc ON sp.product_id = pc.product_id
-            JOIN materials m ON pc.material_id = m.id
-            WHERE sp.stage_id = ?
+        SELECT m.name, m.type, pc.quantity, pc.length, sp.quantity as stage_qty
+        FROM stage_products sp
+        JOIN product_composition pc ON sp.product_id = pc.product_id
+        JOIN materials m ON pc.material_id = m.id
+        WHERE sp.stage_id = ?
         """, (stage_id,))
 
         for name, mtype, comp_quantity, length, stage_qty in cursor.fetchall():
@@ -1938,10 +1971,10 @@ class OrdersTab(QWidget):
 
         # Материалы напрямую в этапе
         cursor.execute("""
-            SELECT m.name, m.type, sm.quantity, sm.length
-            FROM stage_materials sm
-            JOIN materials m ON sm.material_id = m.id
-            WHERE sm.stage_id = ?
+        SELECT m.name, m.type, sm.quantity, sm.length
+        FROM stage_materials sm
+        JOIN materials m ON sm.material_id = m.id
+        WHERE sm.stage_id = ?
         """, (stage_id,))
 
         for name, mtype, sm_quantity, length in cursor.fetchall():
@@ -1966,9 +1999,9 @@ class OrdersTab(QWidget):
                 product_name = cursor.fetchone()[0]
 
                 cursor.execute("""SELECT m.name, m.type, pc.quantity, pc.length
-                                FROM product_composition pc
-                                JOIN materials m ON pc.material_id = m.id
-                                WHERE pc.product_id = ?""", (item_id,))
+                FROM product_composition pc
+                JOIN materials m ON pc.material_id = m.id
+                WHERE pc.product_id = ?""", (item_id,))
 
                 for material, mtype, comp_quantity, length in cursor.fetchall():
                     if mtype == "Пиломатериал" and length:
@@ -1987,12 +2020,12 @@ class OrdersTab(QWidget):
 
                 # Материалы из изделий в этапе
                 cursor.execute("""
-                    SELECT m.name, m.type, pc.quantity, pc.length, sp.quantity as stage_qty, p.name as product_name
-                    FROM stage_products sp
-                    JOIN products p ON sp.product_id = p.id
-                    JOIN product_composition pc ON sp.product_id = pc.product_id
-                    JOIN materials m ON pc.material_id = m.id
-                    WHERE sp.stage_id = ?
+                SELECT m.name, m.type, pc.quantity, pc.length, sp.quantity as stage_qty, p.name as product_name
+                FROM stage_products sp
+                JOIN products p ON sp.product_id = p.id
+                JOIN product_composition pc ON sp.product_id = pc.product_id
+                JOIN materials m ON pc.material_id = m.id
+                WHERE sp.stage_id = ?
                 """, (item_id,))
 
                 for material, mtype, comp_qty, length, stage_qty, product_name in cursor.fetchall():
@@ -2007,10 +2040,10 @@ class OrdersTab(QWidget):
 
                 # Материалы напрямую в этапе
                 cursor.execute("""
-                    SELECT m.name, m.type, sm.quantity, sm.length
-                    FROM stage_materials sm
-                    JOIN materials m ON sm.material_id = m.id
-                    WHERE sm.stage_id = ?
+                SELECT m.name, m.type, sm.quantity, sm.length
+                FROM stage_materials sm
+                JOIN materials m ON sm.material_id = m.id
+                WHERE sm.stage_id = ?
                 """, (item_id,))
 
                 for material, mtype, sm_quantity, length in cursor.fetchall():
@@ -2127,13 +2160,13 @@ class OrdersTab(QWidget):
             for item_type, item_id, name, quantity, cost in order_details:
                 if item_type == 'product':
                     cursor.execute("""INSERT INTO order_items 
-                                    (order_id, product_id, stage_id, quantity, product_name, cost, item_type) 
-                                    VALUES (?, ?, NULL, ?, ?, ?, ?)""",
+                    (order_id, product_id, stage_id, quantity, product_name, cost, item_type) 
+                    VALUES (?, ?, NULL, ?, ?, ?, ?)""",
                                  (order_id, item_id, quantity, name, cost, 'product'))
                 else:  # stage
                     cursor.execute("""INSERT INTO order_items 
-                                    (order_id, product_id, stage_id, quantity, product_name, cost, item_type) 
-                                    VALUES (?, NULL, ?, ?, ?, ?, ?)""",
+                    (order_id, product_id, stage_id, quantity, product_name, cost, item_type) 
+                    VALUES (?, NULL, ?, ?, ?, ?, ?)""",
                                  (order_id, item_id, quantity, name, cost, 'stage'))
 
             conn.commit()
@@ -2152,8 +2185,10 @@ class OrdersTab(QWidget):
             else:
                 pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
 
+            # ИСПРАВЛЕНИЕ: Убеждаемся что папка orders создана
             if not os.path.exists(pdf_dir):
                 os.makedirs(pdf_dir)
+                print(f"Создана папка для PDF отчетов: {pdf_dir}")
 
             pdf_filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_order.pdf"
             pdf_path = os.path.join(pdf_dir, pdf_filename)
@@ -2166,25 +2201,58 @@ class OrdersTab(QWidget):
 
             doc = SimpleDocTemplate(pdf_path, pagesize=letter)
             styles = getSampleStyleSheet()
-            story = []
 
-            story.append(Paragraph(f"Заказ от {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Title']))
+            # ИСПРАВЛЕНИЕ: Используем зарегистрированный Arial шрифт
+            if ARIAL_FONT_REGISTERED:
+                # Создаем пользовательские стили с Arial
+                from reportlab.lib.styles import ParagraphStyle
+                
+                title_style = ParagraphStyle(
+                    'CustomTitle',
+                    parent=styles['Title'],
+                    fontName='Arial',
+                    fontSize=16,
+                    spaceAfter=12
+                )
+                
+                heading_style = ParagraphStyle(
+                    'CustomHeading',
+                    parent=styles['Heading2'], 
+                    fontName='Arial',
+                    fontSize=14,
+                    spaceAfter=6
+                )
+                
+                normal_style = ParagraphStyle(
+                    'CustomNormal',
+                    parent=styles['Normal'],
+                    fontName='Arial',
+                    fontSize=12
+                )
+            else:
+                # Fallback на стандартные стили
+                title_style = styles['Title']
+                heading_style = styles['Heading2']
+                normal_style = styles['Normal']
+
+            story = []
+            story.append(Paragraph(f"Заказ от {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", title_style))
             story.append(Spacer(1, 12))
 
             sale_price = total_cost * 2
-            story.append(Paragraph(f"Себестоимость: {total_cost:.2f} руб", styles['Heading2']))
-            story.append(Paragraph(f"Цена реализации: {sale_price:.2f} руб", styles['Heading2']))
+            story.append(Paragraph(f"Себестоимость: {total_cost:.2f} руб", heading_style))
+            story.append(Paragraph(f"Цена реализации: {sale_price:.2f} руб", heading_style))
             story.append(Spacer(1, 12))
 
-            story.append(Paragraph("Состав заказа:", styles['Heading2']))
+            story.append(Paragraph("Состав заказа:", heading_style))
             for item_type, _, name, quantity, _ in order_details:
                 type_text = "Изделие" if item_type == 'product' else "Этап"
-                story.append(Paragraph(f"- {name} ({type_text}): {quantity} шт", styles['Normal']))
+                story.append(Paragraph(f"- {name} ({type_text}): {quantity} шт", normal_style))
 
             if instructions_text:
                 story.append(Spacer(1, 12))
-                story.append(Paragraph("Инструкции:", styles['Heading2']))
-                story.append(Paragraph(instructions_text.replace('\n', '<br/>'), styles['Normal']))
+                story.append(Paragraph("Инструкции:", heading_style))
+                story.append(Paragraph(instructions_text.replace('\n', '<br/>'), normal_style))
 
             doc.build(story)
             QMessageBox.information(self, "PDF", f"PDF заказа сохранён: {pdf_path}")
@@ -2215,11 +2283,11 @@ class OrdersTab(QWidget):
         cursor = conn.cursor()
         try:
             cursor.execute("""SELECT o.id, o.order_date, o.total_cost, 
-                            SUM(oi.quantity) as total_items
-                            FROM orders o
-                            JOIN order_items oi ON o.id = oi.order_id
-                            GROUP BY o.id
-                            ORDER BY o.order_date DESC""")
+            SUM(oi.quantity) as total_items
+            FROM orders o
+            JOIN order_items oi ON o.id = oi.order_id
+            GROUP BY o.id
+            ORDER BY o.order_date DESC""")
             orders = cursor.fetchall()
 
             self.history_table.setRowCount(len(orders))
@@ -2269,6 +2337,65 @@ class OrdersTab(QWidget):
 
         dialog.setLayout(layout)
         dialog.exec_()
+
+    # ИСПРАВЛЕНИЕ: Новые методы для работы с PDF
+    def open_pdf_file(self, order_id):
+        """Открывает PDF файл для указанного заказа"""
+        try:
+            # Получаем имя PDF файла из БД
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT pdf_filename FROM orders WHERE id = ?", (order_id,))
+            result = cursor.fetchone()
+            conn.close()
+            
+            if not result or not result[0]:
+                QMessageBox.warning(self, "PDF не найден", "PDF файл для этого заказа не создан")
+                return
+                
+            pdf_filename = result[0]
+            
+            # Определяем путь к PDF файлу
+            if getattr(sys, 'frozen', False):
+                pdf_dir = os.path.join(os.path.dirname(sys.executable), 'orders')
+            else:
+                pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
+                
+            pdf_path = os.path.join(pdf_dir, pdf_filename)
+            
+            if not os.path.exists(pdf_path):
+                QMessageBox.warning(self, "Файл не найден", 
+                                  f"PDF файл не найден:\n{pdf_path}")
+                return
+            
+            # Открываем PDF файл кроссплатформенно
+            system = platform.system()
+            if system == "Windows":
+                os.startfile(pdf_path)
+            elif system == "Darwin":  # macOS
+                subprocess.run(["open", pdf_path])
+            else:  # Linux
+                subprocess.run(["xdg-open", pdf_path])
+                
+            print(f"Открыт PDF файл: {pdf_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть PDF:\n{str(e)}")
+
+    def open_selected_pdf(self):
+        """Открывает PDF для выбранного заказа в истории"""
+        selected_row = self.history_table.currentRow()
+        
+        if selected_row == -1:
+            QMessageBox.warning(self, "Выберите заказ", 
+                              "Пожалуйста, выберите заказ из списка истории")
+            return
+            
+        # Получаем ID заказа из первой колонки
+        order_id = int(self.history_table.item(selected_row, 0).text())
+        
+        # Вызываем метод открытия PDF
+        self.open_pdf_file(order_id)
 
 
 # ИСПРАВЛЕННЫЙ ГЛАВНЫЙ КЛАСС
