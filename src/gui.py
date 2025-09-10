@@ -1,6 +1,7 @@
 # src/gui.py - ПОЛНОСТЬЮ ИСПРАВЛЕННАЯ ВЕРСИЯ
 import sys
 import os
+import math
 import subprocess
 import sqlite3
 import platform
@@ -17,7 +18,7 @@ from collections import defaultdict
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QTableWidget,
                             QTableWidgetItem, QPushButton, QVBoxLayout, QWidget,
                             QHeaderView, QMessageBox, QLabel, QLineEdit, QComboBox,
-                            QHBoxLayout, QFormLayout, QGroupBox, QSpinBox, QTextEdit, 
+                            QHBoxLayout, QFormLayout, QGroupBox, QSpinBox,QDoubleSpinBox, QTextEdit,
                             QDialog, QSplitter)
 from PyQt5.QtCore import Qt
 
@@ -66,7 +67,6 @@ class StagesTab(QWidget):
         # Левая панель - список этапов
         left_panel = QWidget()
         left_layout = QVBoxLayout()
-
         stages_group = QGroupBox("Этапы")
         stages_layout = QVBoxLayout()
 
@@ -77,6 +77,7 @@ class StagesTab(QWidget):
         self.stages_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.stages_table.cellClicked.connect(self.on_stage_selected)
         self.stages_table.cellChanged.connect(self.on_stage_cell_edited)
+
         stages_layout.addWidget(self.stages_table)
 
         # Форма добавления этапа
@@ -114,26 +115,27 @@ class StagesTab(QWidget):
         self.composition_group = QGroupBox("Состав этапа")
         self.composition_group.setEnabled(False)
         composition_layout = QVBoxLayout()
-
         composition_tabs = QTabWidget()
 
         # Вкладка "Изделия в этапе"
         products_tab = QWidget()
         products_layout = QVBoxLayout()
-
         self.stage_products_table = QTableWidget()
-        self.stage_products_table.setColumnCount(4)
-        self.stage_products_table.setHorizontalHeaderLabels(["ID", "Изделие", "Количество", "Стоимость"])
+        self.stage_products_table.setColumnCount(5)
+        self.stage_products_table.setHorizontalHeaderLabels(
+            ["ID", "Изделие", "Часть", "Количество", "Стоимость"]
+        )
         self.stage_products_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-
-        # ИСПРАВЛЕНИЕ 2: Добавляем редактирование количества изделий
         self.stage_products_table.cellChanged.connect(self.on_stage_product_cell_edited)
-
         products_layout.addWidget(self.stage_products_table)
 
         product_form = QFormLayout()
         self.product_combo = QComboBox()
         product_form.addRow(QLabel("Изделие:"), self.product_combo)
+
+        self.product_part_combo = QComboBox()
+        self.product_part_combo.addItems(["start", "meter", "end"])
+        product_form.addRow(QLabel("Часть:"), self.product_part_combo)
 
         self.product_quantity_input = QSpinBox()
         self.product_quantity_input.setMinimum(1)
@@ -158,20 +160,22 @@ class StagesTab(QWidget):
         # Вкладка "Материалы в этапе"
         materials_tab = QWidget()
         materials_layout = QVBoxLayout()
-
         self.stage_materials_table = QTableWidget()
-        self.stage_materials_table.setColumnCount(6)
-        self.stage_materials_table.setHorizontalHeaderLabels(["ID", "Материал", "Тип", "Количество", "Длина", "Стоимость"])
+        self.stage_materials_table.setColumnCount(7)
+        self.stage_materials_table.setHorizontalHeaderLabels(
+            ["ID", "Материал", "Тип", "Часть", "Количество", "Длина", "Стоимость"]
+        )
         self.stage_materials_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-
-        # ИСПРАВЛЕНИЕ 2: Добавляем редактирование количества и длины материалов
         self.stage_materials_table.cellChanged.connect(self.on_stage_material_cell_edited)
-
         materials_layout.addWidget(self.stage_materials_table)
 
         material_form = QFormLayout()
         self.material_combo = QComboBox()
         material_form.addRow(QLabel("Материал:"), self.material_combo)
+
+        self.material_part_combo = QComboBox()
+        self.material_part_combo.addItems(["start", "meter", "end"])
+        material_form.addRow(QLabel("Часть:"), self.material_part_combo)
 
         self.material_quantity_input = QSpinBox()
         self.material_quantity_input.setMinimum(1)
@@ -198,12 +202,11 @@ class StagesTab(QWidget):
         composition_tabs.addTab(materials_tab, "Материалы")
 
         composition_layout.addWidget(composition_tabs)
-
         self.cost_label = QLabel("Себестоимость этапа: 0.00 руб")
         self.cost_label.setStyleSheet("font-weight: bold; font-size: 12pt;")
         composition_layout.addWidget(self.cost_label)
-
         self.composition_group.setLayout(composition_layout)
+
         main_splitter.addWidget(self.composition_group)
         main_splitter.setSizes([300, 700])
 
@@ -211,79 +214,93 @@ class StagesTab(QWidget):
         main_layout.addWidget(main_splitter)
         self.setLayout(main_layout)
 
-    # ИСПРАВЛЕНИЕ 2: Новые методы для редактирования состава этапа
     def on_stage_product_cell_edited(self, row, column):
-        """Обработка редактирования ячеек в таблице изделий этапа"""
+        """Редактирование части/количества изделия в этапе"""
         try:
-            if column == 2:  # Количество изделия
-                sp_id = int(self.stage_products_table.item(row, 0).text())
+            sp_id = int(self.stage_products_table.item(row, 0).text())
+            if column == 2:  # Часть
+                new_part = self.stage_products_table.item(row, column).text().strip()
+                if new_part not in ("start", "meter", "end"):
+                    QMessageBox.warning(self, "Ошибка", "Часть должна быть: start, meter или end")
+                    self.load_stage_products()
+                    return
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("UPDATE stage_products SET part = ? WHERE id = ?", (new_part, sp_id))
+                conn.commit()
+                conn.close()
+                self.load_stage_products()
+                self.calculate_stage_cost()
+            elif column == 3:  # Количество
                 new_quantity = int(self.stage_products_table.item(row, column).text())
-
                 if new_quantity < 1:
                     QMessageBox.warning(self, "Ошибка", "Количество должно быть больше 0")
                     self.load_stage_products()
                     return
-
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 cursor.execute("UPDATE stage_products SET quantity = ? WHERE id = ?", (new_quantity, sp_id))
                 conn.commit()
                 conn.close()
-
-                # Обновляем стоимость и пересчитываем себестоимость этапа
                 self.load_stage_products()
                 self.calculate_stage_cost()
-
-        except (ValueError, TypeError) as e:
-            QMessageBox.warning(self, "Ошибка", "Количество должно быть целым числом")
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, "Ошибка", "Некорректное значение")
             self.load_stage_products()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при обновлении: {str(e)}")
             self.load_stage_products()
 
     def on_stage_material_cell_edited(self, row, column):
-        """Обработка редактирования ячеек в таблице материалов этапа"""
+        """Редактирование части/количества/длины материалов этапа"""
         try:
             sm_id = int(self.stage_materials_table.item(row, 0).text())
 
-            if column == 3:  # Количество материала
-                new_quantity = int(self.stage_materials_table.item(row, column).text())
+            if column == 3:  # Часть
+                new_part = self.stage_materials_table.item(row, column).text().strip()
+                if new_part not in ("start", "meter", "end"):
+                    QMessageBox.warning(self, "Ошибка", "Часть должна быть: start, meter или end")
+                    self.load_stage_materials()
+                    return
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("UPDATE stage_materials SET part = ? WHERE id = ?", (new_part, sm_id))
+                conn.commit()
+                conn.close()
+                self.load_stage_materials()
+                self.calculate_stage_cost()
 
+            elif column == 4:  # Количество
+                new_quantity = int(self.stage_materials_table.item(row, column).text())
                 if new_quantity < 1:
                     QMessageBox.warning(self, "Ошибка", "Количество должно быть больше 0")
                     self.load_stage_materials()
                     return
-
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 cursor.execute("UPDATE stage_materials SET quantity = ? WHERE id = ?", (new_quantity, sm_id))
                 conn.commit()
                 conn.close()
+                self.load_stage_materials()
+                self.calculate_stage_cost()
 
-            elif column == 4:  # Длина материала
+            elif column == 5:  # Длина
                 new_length_text = self.stage_materials_table.item(row, column).text().strip()
                 new_length = float(new_length_text) if new_length_text else None
-
                 if new_length is not None and new_length < 0:
                     QMessageBox.warning(self, "Ошибка", "Длина не может быть отрицательной")
                     self.load_stage_materials()
                     return
-
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 cursor.execute("UPDATE stage_materials SET length = ? WHERE id = ?", (new_length, sm_id))
                 conn.commit()
                 conn.close()
+                self.load_stage_materials()
+                self.calculate_stage_cost()
 
-            # Обновляем стоимость и пересчитываем себестоимость этапа
-            self.load_stage_materials()
-            self.calculate_stage_cost()
-
-        except (ValueError, TypeError) as e:
-            if column == 3:
-                QMessageBox.warning(self, "Ошибка", "Количество должно быть целым числом")
-            else:
-                QMessageBox.warning(self, "Ошибка", "Длина должна быть числом")
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, "Ошибка", "Некорректное значение")
             self.load_stage_materials()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при обновлении: {str(e)}")
@@ -352,147 +369,149 @@ class StagesTab(QWidget):
         self.stages_table.cellChanged.connect(self.on_stage_cell_edited)  # Подключаем обратно
 
     def load_stage_products(self):
-        """Загружает изделия в составе выбранного этапа с поддержкой редактирования"""
+        """Загружает изделия в составе выбранного этапа с поддержкой части"""
         if not self.selected_stage_id:
             return
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("""
-        SELECT sp.id, p.name, sp.quantity, (p.cost * sp.quantity) as total_cost
-        FROM stage_products sp
-        JOIN products p ON sp.product_id = p.id
-        WHERE sp.stage_id = ?
+            SELECT sp.id, p.name, sp.part, sp.quantity, (p.cost * sp.quantity) as total_cost
+            FROM stage_products sp
+            JOIN products p ON sp.product_id = p.id
+            WHERE sp.stage_id = ?
         """, (self.selected_stage_id,))
         stage_products = cursor.fetchall()
         conn.close()
 
-        # Отключаем сигнал при загрузке
         self.stage_products_table.cellChanged.disconnect()
-
         self.stage_products_table.setRowCount(len(stage_products))
-        for row_idx, (sp_id, prod_name, quantity, total_cost) in enumerate(stage_products):
-            # ID (только чтение)
+
+        for row_idx, (sp_id, prod_name, part, quantity, total_cost) in enumerate(stage_products):
             id_item = QTableWidgetItem(str(sp_id))
             id_item.setFlags(id_item.flags() ^ Qt.ItemIsEditable)
             self.stage_products_table.setItem(row_idx, 0, id_item)
 
-            # Название (только чтение)
             name_item = QTableWidgetItem(prod_name)
             name_item.setFlags(name_item.flags() ^ Qt.ItemIsEditable)
             self.stage_products_table.setItem(row_idx, 1, name_item)
 
-            # Количество (редактируемое)
-            self.stage_products_table.setItem(row_idx, 2, QTableWidgetItem(str(quantity)))
+            self.stage_products_table.setItem(row_idx, 2, QTableWidgetItem(part))
+            self.stage_products_table.setItem(row_idx, 3, QTableWidgetItem(str(quantity)))
 
-            # Стоимость (только чтение)
             cost_item = QTableWidgetItem(f"{total_cost:.2f} руб")
             cost_item.setFlags(cost_item.flags() ^ Qt.ItemIsEditable)
-            self.stage_products_table.setItem(row_idx, 3, cost_item)
+            self.stage_products_table.setItem(row_idx, 4, cost_item)
 
-        # Подключаем сигнал обратно
         self.stage_products_table.cellChanged.connect(self.on_stage_product_cell_edited)
 
     def load_stage_materials(self):
-        """Загружает материалы в составе выбранного этапа с поддержкой редактирования"""
+        """Загружает материалы в составе выбранного этапа с поддержкой редактирования и части"""
         if not self.selected_stage_id:
             return
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
         cursor.execute("""
-        SELECT sm.id, m.name, m.type, sm.quantity, sm.length, m.price,
-        CASE 
-        WHEN m.type = 'Пиломатериал' AND sm.length IS NOT NULL 
-        THEN (m.price * sm.quantity * sm.length)
-        ELSE (m.price * sm.quantity)
-        END as total_cost
-        FROM stage_materials sm
-        JOIN materials m ON sm.material_id = m.id
-        WHERE sm.stage_id = ?
+            SELECT sm.id, m.name, m.type, sm.part, sm.quantity, sm.length, m.price,
+            CASE
+                WHEN m.type = 'Пиломатериал' AND sm.length IS NOT NULL
+                THEN (m.price * sm.quantity * sm.length)
+                ELSE (m.price * sm.quantity)
+            END as total_cost
+            FROM stage_materials sm
+            JOIN materials m ON sm.material_id = m.id
+            WHERE sm.stage_id = ?
         """, (self.selected_stage_id,))
         stage_materials = cursor.fetchall()
         conn.close()
 
-        # Отключаем сигнал при загрузке
         self.stage_materials_table.cellChanged.disconnect()
-
         self.stage_materials_table.setRowCount(len(stage_materials))
-        for row_idx, (sm_id, mat_name, mat_type, quantity, length, price, total_cost) in enumerate(stage_materials):
-            # ID (только чтение)
+
+        for row_idx, (sm_id, mat_name, mat_type, part, quantity, length, price, total_cost) in enumerate(
+                stage_materials):
             id_item = QTableWidgetItem(str(sm_id))
             id_item.setFlags(id_item.flags() ^ Qt.ItemIsEditable)
             self.stage_materials_table.setItem(row_idx, 0, id_item)
 
-            # Название (только чтение)
             name_item = QTableWidgetItem(mat_name)
             name_item.setFlags(name_item.flags() ^ Qt.ItemIsEditable)
             self.stage_materials_table.setItem(row_idx, 1, name_item)
 
-            # Тип (только чтение)
             type_item = QTableWidgetItem(mat_type)
             type_item.setFlags(type_item.flags() ^ Qt.ItemIsEditable)
             self.stage_materials_table.setItem(row_idx, 2, type_item)
 
-            # Количество (редактируемое)
-            self.stage_materials_table.setItem(row_idx, 3, QTableWidgetItem(str(quantity)))
+            self.stage_materials_table.setItem(row_idx, 3, QTableWidgetItem(part))
+            self.stage_materials_table.setItem(row_idx, 4, QTableWidgetItem(str(quantity)))
 
-            # Длина (редактируемая, если не метиз)
             length_item = QTableWidgetItem(str(length) if length else "")
             if mat_type == "Метиз":
-                length_item.setFlags(length_item.flags() ^ Qt.ItemIsEditable)  # Запрещаем редактирование для метизов
-            self.stage_materials_table.setItem(row_idx, 4, length_item)
+                length_item.setFlags(length_item.flags() ^ Qt.ItemIsEditable)
+            self.stage_materials_table.setItem(row_idx, 5, length_item)
 
-            # Стоимость (только чтение)
             cost_item = QTableWidgetItem(f"{total_cost:.2f} руб")
             cost_item.setFlags(cost_item.flags() ^ Qt.ItemIsEditable)
-            self.stage_materials_table.setItem(row_idx, 5, cost_item)
+            self.stage_materials_table.setItem(row_idx, 6, cost_item)
 
-        # Подключаем сигнал обратно
         self.stage_materials_table.cellChanged.connect(self.on_stage_material_cell_edited)
 
     def calculate_stage_cost(self):
-        """Исправленный расчет себестоимости этапа"""
+        """Расчет себестоимости этапа с разложением по частям"""
         if not self.selected_stage_id:
             return
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
         try:
-            # Стоимость изделий в этапе
+            # Стоимость изделий по частям
             cursor.execute("""
-            SELECT SUM(p.cost * sp.quantity) as products_cost
-            FROM stage_products sp
-            JOIN products p ON sp.product_id = p.id
-            WHERE sp.stage_id = ?
+                SELECT sp.part, p.cost, sp.quantity
+                FROM stage_products sp
+                JOIN products p ON sp.product_id = p.id
+                WHERE sp.stage_id = ?
             """, (self.selected_stage_id,))
-            products_cost = cursor.fetchone()[0] or 0
+            start_cost = meter_cost = end_cost = 0.0
+            for part, pcost, qty in cursor.fetchall():
+                if part == 'start':
+                    start_cost += pcost * qty
+                elif part == 'meter':
+                    meter_cost += pcost * qty
+                else:
+                    end_cost += pcost * qty
 
-            # Правильный расчет стоимости материалов
+            # Стоимость материалов по частям (за 1 метр для 'meter')
             cursor.execute("""
-            SELECT sm.quantity, sm.length, m.price, m.type
-            FROM stage_materials sm
-            JOIN materials m ON sm.material_id = m.id
-            WHERE sm.stage_id = ?
+                SELECT sm.part, m.type, m.price, sm.quantity, sm.length
+                FROM stage_materials sm
+                JOIN materials m ON sm.material_id = m.id
+                WHERE sm.stage_id = ?
             """, (self.selected_stage_id,))
+            for part, mtype, price, qty, length in cursor.fetchall():
+                if mtype == "Пиломатериал" and length:
+                    add = price * qty * length
+                else:
+                    add = price * qty
+                if part == 'start':
+                    start_cost += add
+                elif part == 'meter':
+                    meter_cost += add
+                else:
+                    end_cost += add
 
-            materials_cost = 0
-            for quantity, length, price, material_type in cursor.fetchall():
-                if material_type == "Пиломатериал" and length:
-                    materials_cost += price * quantity * length
-                else:  # Метизы
-                    materials_cost += price * quantity
+            # Обновляем отображение: 1 метр = start + meter + end
+            one_meter_total = start_cost + meter_cost + end_cost
+            self.cost_label.setText(
+                f"Себестоимость этапа (1 м): {one_meter_total:.2f} руб | "
+                f"Метр: {meter_cost:.2f} руб | Крепления: {(start_cost + end_cost):.2f} руб"
+            )
 
-            total_cost = products_cost + materials_cost
-
-            cursor.execute("UPDATE stages SET cost = ? WHERE id = ?", (total_cost, self.selected_stage_id))
+            # В stages.cost сохраняем стоимость "метровой" части для совместимости
+            cursor.execute("UPDATE stages SET cost = ? WHERE id = ?", (meter_cost, self.selected_stage_id))
             conn.commit()
 
-            self.cost_label.setText(f"Себестоимость этапа: {total_cost:.2f} руб")
-            self.load_stages()  # Обновляем таблицу
-
+            self.load_stages()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка расчета", f"Произошла ошибка: {str(e)}")
         finally:
@@ -605,6 +624,7 @@ class StagesTab(QWidget):
             return
 
         product_id = self.product_combo.currentData()
+        part = self.product_part_combo.currentText()
         quantity = self.product_quantity_input.value()
 
         if not product_id:
@@ -614,8 +634,10 @@ class StagesTab(QWidget):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO stage_products (stage_id, product_id, quantity) VALUES (?, ?, ?)",
-                         (self.selected_stage_id, product_id, quantity))
+            cursor.execute(
+                "INSERT INTO stage_products (stage_id, product_id, quantity, part) VALUES (?, ?, ?, ?)",
+                (self.selected_stage_id, product_id, quantity, part)
+            )
             conn.commit()
             self.load_stage_products()
             self.calculate_stage_cost()
@@ -655,6 +677,7 @@ class StagesTab(QWidget):
             return
 
         material_id = self.material_combo.currentData()
+        part = self.material_part_combo.currentText()
         quantity = self.material_quantity_input.value()
         length = self.material_length_input.text().strip()
 
@@ -671,8 +694,10 @@ class StagesTab(QWidget):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO stage_materials (stage_id, material_id, quantity, length) VALUES (?, ?, ?, ?)",
-                         (self.selected_stage_id, material_id, quantity, length_val))
+            cursor.execute(
+                "INSERT INTO stage_materials (stage_id, material_id, quantity, length, part) VALUES (?, ?, ?, ?, ?)",
+                (self.selected_stage_id, material_id, quantity, length_val, part)
+            )
             conn.commit()
             self.load_stage_materials()
             self.calculate_stage_cost()
@@ -1572,19 +1597,20 @@ class OrdersTab(QWidget):
 
     def init_ui(self):
         main_layout = QVBoxLayout()
+
         order_group = QGroupBox("Создать заказ")
         order_layout = QVBoxLayout()
 
         self.order_table = QTableWidget()
-        self.order_table.setColumnCount(5)
-        self.order_table.setHorizontalHeaderLabels(["Тип", "Название", "Количество", "Себестоимость", "Действия"])
+        self.order_table.setColumnCount(6)
+        self.order_table.setHorizontalHeaderLabels(
+            ["Тип", "Название", "Количество", "Длина (м)", "Себестоимость", "Действия"])
         self.order_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.order_table.cellDoubleClicked.connect(self.on_cell_double_clicked)
         order_layout.addWidget(self.order_table)
 
         form_layout = QFormLayout()
 
-        # ИСПРАВЛЕНИЕ 3: Исправляем логику переключения типов
         self.item_type_combo = QComboBox()
         self.item_type_combo.addItems(["Изделие", "Этап"])
         self.item_type_combo.currentTextChanged.connect(self.on_item_type_changed)
@@ -1598,6 +1624,14 @@ class OrdersTab(QWidget):
         self.quantity_spin.setMaximum(999)
         self.quantity_spin.setValue(1)
         form_layout.addRow(QLabel("Количество:"), self.quantity_spin)
+
+        self.length_spin = QDoubleSpinBox()
+        self.length_spin.setDecimals(2)
+        self.length_spin.setMinimum(0.01)
+        self.length_spin.setMaximum(9999.0)
+        self.length_spin.setSingleStep(0.10)
+        form_layout.addRow(QLabel("Длина (м):"), self.length_spin)
+        self.length_spin.hide()  # по умолчанию скрыто (для Изделия)
 
         self.add_to_order_btn = QPushButton("Добавить в заказ")
         self.add_to_order_btn.clicked.connect(self.add_to_order)
@@ -1633,10 +1667,8 @@ class OrdersTab(QWidget):
         order_group.setLayout(order_layout)
         main_layout.addWidget(order_group)
 
-        # История заказов - ИСПРАВЛЕНИЕ: Добавляем кнопки PDF
         history_group = QGroupBox("История заказов")
         history_layout = QVBoxLayout()
-
         self.history_table = QTableWidget()
         self.history_table.setColumnCount(4)
         self.history_table.setHorizontalHeaderLabels(["ID", "Дата", "Позиций", "Сумма"])
@@ -1644,9 +1676,7 @@ class OrdersTab(QWidget):
         self.history_table.cellDoubleClicked.connect(self.show_order_details)
         history_layout.addWidget(self.history_table)
 
-        # ИСПРАВЛЕНИЕ: Добавляем кнопки для работы с PDF
         history_buttons_layout = QHBoxLayout()
-
         self.open_pdf_btn = QPushButton("Открыть PDF")
         self.open_pdf_btn.clicked.connect(self.open_selected_pdf)
         history_buttons_layout.addWidget(self.open_pdf_btn)
@@ -1654,26 +1684,24 @@ class OrdersTab(QWidget):
         self.refresh_history_btn = QPushButton("Обновить историю")
         self.refresh_history_btn.clicked.connect(self.load_order_history)
         history_buttons_layout.addWidget(self.refresh_history_btn)
-
-        history_buttons_layout.addStretch()  # Добавляем пружину для выравнивания
+        history_buttons_layout.addStretch()
         history_layout.addLayout(history_buttons_layout)
 
         history_group.setLayout(history_layout)
         main_layout.addWidget(history_group)
+
         self.setLayout(main_layout)
 
     def on_item_type_changed(self, item_type):
-        """ИСПРАВЛЕНИЕ 3: Правильная обработка смены типа позиции"""
-        print(f"[DEBUG] Смена типа на: {item_type}")
-
-        # Очищаем текущий список
+        """Переключение между Изделием и Этапом с показом поля длины для этапа"""
         self.item_combo.clear()
-
         if item_type == "Изделие":
-            print("[DEBUG] Загружаем изделия")
+            self.length_spin.hide()
+            self.quantity_spin.show()
             self.load_products()
-        elif item_type == "Этап":
-            print("[DEBUG] Загружаем этапы")
+        else:
+            self.length_spin.show()
+            self.quantity_spin.hide()
             self.load_stages()
 
     def load_products(self):
@@ -1709,70 +1737,60 @@ class OrdersTab(QWidget):
             print(f"[DEBUG] Добавлен этап: {stage_name} (ID: {stage_id})")
 
     def add_to_order(self):
-        """ИСПРАВЛЕНИЕ 3: Улучшенная проверка соответствия типа и данных"""
+        """Добавление позиции в заказ: для Этапа учитываем длину, для Изделия — количество"""
         item_id = self.item_combo.currentData()
         item_name = self.item_combo.currentText()
-        quantity = self.quantity_spin.value()
         item_type = self.item_type_combo.currentText()
-
         if not item_id:
             QMessageBox.warning(self, "Ошибка", f"Выберите {item_type.lower()}")
             return
 
-        print(f"[DEBUG] Добавляем в заказ: {item_type} '{item_name}' (ID: {item_id}), количество: {quantity}")
-
-        # Получаем стоимость в зависимости от типа
         if item_type == "Изделие":
+            quantity = self.quantity_spin.value()
             cost_per_unit = self._get_product_cost(item_id)
-        elif item_type == "Этап":
-            cost_per_unit = self._get_stage_cost(item_id)
-        else:
-            QMessageBox.warning(self, "Ошибка", f"Неизвестный тип: {item_type}")
-            return
-
-        print(f"[DEBUG] Стоимость за единицу: {cost_per_unit}")
-
-        # Проверяем существующие позиции
-        existing_row = -1
-        for row in range(self.order_table.rowCount()):
-            if (self.order_table.item(row, 1).data(Qt.UserRole) == item_id and
-                self.order_table.item(row, 0).text() == item_type):
-                existing_row = row
-                break
-
-        if existing_row >= 0:
-            # Обновляем существующую позицию
-            current_quantity = int(self.order_table.item(existing_row, 2).text())
-            new_quantity = current_quantity + quantity
-            self.order_table.item(existing_row, 2).setText(str(new_quantity))
-            new_cost = cost_per_unit * new_quantity
-            self.order_table.item(existing_row, 3).setText(f"{new_cost:.2f} руб")
-        else:
-            # Добавляем новую позицию
             row_count = self.order_table.rowCount()
             self.order_table.setRowCount(row_count + 1)
 
-            # Тип позиции
-            type_item = QTableWidgetItem(item_type)
-            self.order_table.setItem(row_count, 0, type_item)
-
-            # Название с сохранением ID и типа
+            self.order_table.setItem(row_count, 0, QTableWidgetItem(item_type))
             name_item = QTableWidgetItem(item_name)
             name_item.setData(Qt.UserRole, item_id)
             name_item.setData(Qt.UserRole + 1, item_type)
             self.order_table.setItem(row_count, 1, name_item)
 
             self.order_table.setItem(row_count, 2, QTableWidgetItem(str(quantity)))
-            self.order_table.setItem(row_count, 3, QTableWidgetItem(f"{cost_per_unit * quantity:.2f} руб"))
+            self.order_table.setItem(row_count, 3, QTableWidgetItem(""))  # длина пустая для изделия
+            self.order_table.setItem(row_count, 4, QTableWidgetItem(f"{cost_per_unit * quantity:.2f} руб"))
 
             delete_btn = QPushButton("Удалить")
             delete_btn.clicked.connect(lambda: self.remove_from_order(row_count))
-            self.order_table.setCellWidget(row_count, 4, delete_btn)
+            self.order_table.setCellWidget(row_count, 5, delete_btn)
+
+        else:  # Этап
+            length_m = round(self.length_spin.value(), 2)
+            if length_m <= 0:
+                QMessageBox.warning(self, "Ошибка", "Длина этапа должна быть больше 0")
+                return
+            cost_total = self._compute_stage_cost(stage_id=item_id, length_m=length_m)
+            row_count = self.order_table.rowCount()
+            self.order_table.setRowCount(row_count + 1)
+
+            self.order_table.setItem(row_count, 0, QTableWidgetItem(item_type))
+            name_item = QTableWidgetItem(item_name)
+            name_item.setData(Qt.UserRole, item_id)
+            name_item.setData(Qt.UserRole + 1, item_type)
+            name_item.setData(Qt.UserRole + 2, length_m)  # сохраним длину в ячейке имени
+            self.order_table.setItem(row_count, 1, name_item)
+
+            self.order_table.setItem(row_count, 2, QTableWidgetItem("1"))  # количество строкой = 1 для этапа
+            self.order_table.setItem(row_count, 3, QTableWidgetItem(f"{length_m:.2f}"))  # длина (м)
+            self.order_table.setItem(row_count, 4, QTableWidgetItem(f"{cost_total:.2f} руб"))
+
+            delete_btn = QPushButton("Удалить")
+            delete_btn.clicked.connect(lambda: self.remove_from_order(row_count))
+            self.order_table.setCellWidget(row_count, 5, delete_btn)
 
         self._update_current_order()
         self.update_total_cost()
-
-        print(f"[DEBUG] Заказ обновлен. Всего позиций: {len(self.current_order)}")
 
     def _get_product_cost(self, product_id):
         if product_id in self.product_cost_cache:
@@ -1811,71 +1829,93 @@ class OrdersTab(QWidget):
     def remove_from_order(self, row):
         if row < 0 or row >= self.order_table.rowCount():
             return
-
         self.order_table.removeRow(row)
         self._update_current_order()
         self.update_total_cost()
-
+        # Перепривязать кнопки удаления к колонке 5 ("Действия")
         for row in range(self.order_table.rowCount()):
             delete_btn = QPushButton("Удалить")
             delete_btn.clicked.connect(lambda checked, r=row: self.remove_from_order(r))
-            self.order_table.setCellWidget(row, 4, delete_btn)
+            self.order_table.setCellWidget(row, 5, delete_btn)
 
     def on_cell_double_clicked(self, row, column):
-        if column == 2:  # Количество
+        # Редактирование количества для изделия и длины (м) для этапа
+        item_type = self.order_table.item(row, 0).text()
+        item_id = int(self.order_table.item(row, 1).data(Qt.UserRole))
+
+        if item_type == "Изделие" and column == 2:
             dialog = QDialog(self)
             dialog.setWindowTitle("Изменение количества")
             dialog.setFixedSize(300, 150)
-
             layout = QVBoxLayout()
-
             item_name = self.order_table.item(row, 1).text()
             layout.addWidget(QLabel(f"Позиция: {item_name}"))
-
             spin_box = QSpinBox()
             spin_box.setMinimum(1)
             spin_box.setMaximum(999)
             spin_box.setValue(int(self.order_table.item(row, 2).text()))
             layout.addWidget(QLabel("Новое количество:"))
             layout.addWidget(spin_box)
-
             btn_layout = QHBoxLayout()
-            ok_btn = QPushButton("OK")
+            ok_btn = QPushButton("OK");
             cancel_btn = QPushButton("Отмена")
-
-            ok_btn.clicked.connect(dialog.accept)
+            ok_btn.clicked.connect(dialog.accept);
             cancel_btn.clicked.connect(dialog.reject)
-
-            btn_layout.addWidget(ok_btn)
+            btn_layout.addWidget(ok_btn);
             btn_layout.addWidget(cancel_btn)
             layout.addLayout(btn_layout)
-
             dialog.setLayout(layout)
-
             if dialog.exec_() == QDialog.Accepted:
                 new_quantity = spin_box.value()
                 self.order_table.item(row, 2).setText(str(new_quantity))
-
-                item_type = self.order_table.item(row, 0).text()
-                item_id = int(self.order_table.item(row, 1).data(Qt.UserRole))
-
-                if item_type == "Изделие":
-                    cost_per_unit = self._get_product_cost(item_id)
-                else:
-                    cost_per_unit = self._get_stage_cost(item_id)
-
+                cost_per_unit = self._get_product_cost(item_id)
                 new_cost = cost_per_unit * new_quantity
-                self.order_table.item(row, 3).setText(f"{new_cost:.2f} руб")
+                self.order_table.item(row, 4).setText(f"{new_cost:.2f} руб")
+                self._update_current_order()
+                self.update_total_cost()
 
+        if item_type == "Этап" and column == 3:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Изменение длины (м)")
+            dialog.setFixedSize(320, 160)
+            layout = QVBoxLayout()
+            item_name = self.order_table.item(row, 1).text()
+            layout.addWidget(QLabel(f"Этап: {item_name}"))
+            spin = QDoubleSpinBox()
+            spin.setDecimals(2);
+            spin.setMinimum(0.01);
+            spin.setMaximum(9999.0);
+            spin.setSingleStep(0.10)
+            current_len = float(self.order_table.item(row, 3).text() or "0")
+            spin.setValue(current_len if current_len > 0 else 1.00)
+            layout.addWidget(QLabel("Новая длина (м):"))
+            layout.addWidget(spin)
+            btn_layout = QHBoxLayout()
+            ok_btn = QPushButton("OK");
+            cancel_btn = QPushButton("Отмена")
+            ok_btn.clicked.connect(dialog.accept);
+            cancel_btn.clicked.connect(dialog.reject)
+            btn_layout.addWidget(ok_btn);
+            btn_layout.addWidget(cancel_btn)
+            layout.addLayout(btn_layout)
+            dialog.setLayout(layout)
+            if dialog.exec_() == QDialog.Accepted:
+                new_len = round(spin.value(), 2)
+                self.order_table.item(row, 3).setText(f"{new_len:.2f}")
+                # пересчёт стоимости строки
+                new_cost = self._compute_stage_cost(item_id, new_len)
+                self.order_table.item(row, 4).setText(f"{new_cost:.2f} руб")
+                # обновим сохранённую длину в UserRole+2 у названия
+                name_item = self.order_table.item(row, 1)
+                name_item.setData(Qt.UserRole + 2, new_len)
                 self._update_current_order()
                 self.update_total_cost()
 
     def update_total_cost(self):
-        total = 0
+        total = 0.0
         for row in range(self.order_table.rowCount()):
-            cost_text = self.order_table.item(row, 3).text().replace(' руб', '')
-            total += float(cost_text)
-
+            cost_text = self.order_table.item(row, 4).text().replace(' руб', '')
+            total += float(cost_text or 0)
         self.total_cost_label.setText(f"Общая себестоимость: {total:.2f} руб")
 
     def clear_order(self):
@@ -1889,46 +1929,24 @@ class OrdersTab(QWidget):
             QMessageBox.warning(self, "Ошибка", "Заказ пуст")
             return
 
-        total_cost = 0
-        materials_summary = defaultdict(float)
-
-        for item_type, item_id, quantity in self.current_order:
-            if item_type == "Изделие":
-                cost = self._get_product_cost(item_id)
-                total_cost += cost * quantity
-
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                cursor.execute("""SELECT m.name, pc.quantity, pc.length, m.type
-                FROM product_composition pc
-                JOIN materials m ON pc.material_id = m.id
-                WHERE pc.product_id = ?""", (item_id,))
-
-                for name, comp_quantity, length, mtype in cursor.fetchall():
-                    if mtype == "Пиломатериал" and length:
-                        materials_summary[name] += comp_quantity * quantity * length
-                    else:
-                        materials_summary[name] += comp_quantity * quantity
-                conn.close()
-
-            else:  # Этап
-                cost = self._get_stage_cost(item_id)
-                total_cost += cost * quantity
-
-                materials_from_stage = self._get_stage_materials(item_id, quantity)
-                for material, amount in materials_from_stage.items():
-                    materials_summary[material] += amount
-
-        requirements = self._calculate_material_requirements()
+        total_cost, requirements = self._expand_order_to_requirements()
         stock_items = self._get_current_stock()
 
         optimizer = CuttingOptimizer()
         result = optimizer.optimize_cutting(requirements, stock_items, self.db_path)
 
         materials_message = "📦 Требуемые материалы:\n\n"
-        for material, amount in materials_summary.items():
-            material_types = CuttingOptimizer._get_material_types(self.db_path)
-            unit = "м" if material_types.get(material) == "Пиломатериал" else "шт"
+        # Суммарные количества по материалам (м или шт) уже можно получить, если нужно, отдельно
+        for material, items in requirements.items():
+            # подсчитать сумму значений по материалу
+            amount = 0.0
+            # определяем тип по наличию длин (float) против шт (int)
+            is_length = any(
+                isinstance(val, float) and val > 0 and not float(val).is_integer() or isinstance(val, float) for val, _
+                in items)
+            for val, _ in items:
+                amount += float(val)
+            unit = "м" if is_length else "шт"
             materials_message += f"▫️ {material}: {amount:.2f} {unit}\n"
 
         if result['can_produce']:
@@ -1946,6 +1964,142 @@ class OrdersTab(QWidget):
 
         self.instructions_text.setText(instructions)
         self.total_cost_label.setText(f"Общая себестоимость: {total_cost:.2f} руб")
+
+    def _expand_order_to_requirements(self):
+        """
+        Разворачивает текущий заказ в итоговые требования для оптимизатора раскроя.
+        Возвращает (total_cost, requirements), где requirements:
+        dict[material_name] = list[(value, description)], value=длина(м) для пиломатериалов или количество(шт) для метизов.
+        """
+        from collections import defaultdict
+        req = defaultdict(list)
+        total_cost = 0.0
+
+        for item_type, item_id, quantity in self.current_order:
+            if item_type == "Изделие":
+                cost = self._get_product_cost(item_id)
+                total_cost += cost * quantity
+                conn = sqlite3.connect(self.db_path);
+                c = conn.cursor()
+                c.execute("""SELECT m.name, m.type, pc.quantity, pc.length
+                             FROM product_composition pc JOIN materials m ON pc.material_id=m.id
+                             WHERE pc.product_id=?""", (item_id,))
+                product_name = self._get_product_name(item_id)
+                for name, mtype, q, length in c.fetchall():
+                    if mtype == "Пиломатериал" and length:
+                        for _ in range(int(q * quantity)):
+                            req[name].append((float(length), f"Изделие '{product_name}'"))
+                    else:
+                        req[name].append((q * quantity, f"Изделие '{product_name}'"))
+                conn.close()
+
+            else:  # Этап
+                length_m = self._get_row_length_for_stage(item_id)
+                total_cost += self._compute_stage_cost(item_id, length_m)
+                eff_meters = math.ceil(length_m)
+
+                conn = sqlite3.connect(self.db_path);
+                c = conn.cursor()
+                # Материалы напрямую в этапе
+                c.execute("""SELECT sm.part, m.name, m.type, sm.quantity, sm.length
+                             FROM stage_materials sm JOIN materials m ON sm.material_id=m.id
+                             WHERE sm.stage_id=?""", (item_id,))
+                for part, name, mtype, q, length in c.fetchall():
+                    mult = eff_meters if part == 'meter' else 1
+                    if mtype == "Пиломатериал" and length:
+                        for _ in range(int(q * mult)):
+                            req[name].append((float(length), f"Этап {part}"))
+                    else:
+                        req[name].append((q * mult, f"Этап {part}"))
+
+                # Материалы через изделия этапа
+                c.execute("""SELECT sp.part, sp.quantity, p.id, p.name
+                             FROM stage_products sp JOIN products p ON sp.product_id=p.id
+                             WHERE sp.stage_id=?""", (item_id,))
+                for part, sp_qty, prod_id, prod_name in c.fetchall():
+                    mult = eff_meters if part == 'meter' else 1
+                    c2 = conn.cursor()
+                    c2.execute("""SELECT m.name, m.type, pc.quantity, pc.length
+                                  FROM product_composition pc JOIN materials m ON pc.material_id=m.id
+                                  WHERE pc.product_id=?""", (prod_id,))
+                    for mname, mtype, q, length in c2.fetchall():
+                        if mtype == "Пиломатериал" and length:
+                            for _ in range(int(q * sp_qty * mult)):
+                                req[mname].append((float(length), f"Этап({part})→{prod_name}"))
+                        else:
+                            req[mname].append((q * sp_qty * mult, f"Этап({part})→{prod_name}"))
+                conn.close()
+
+        return total_cost, req
+
+    def _get_product_name(self, product_id: int) -> str:
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT name FROM products WHERE id = ?", (product_id,))
+        row = c.fetchone()
+        conn.close()
+        return row if row else f"Изделие #{product_id}"
+
+    def _compute_stage_cost(self, stage_id: int, length_m: float) -> float:
+        eff_meters = math.ceil(max(0.0, float(length_m)))
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+
+        start = meter = end = 0.0
+        # Изделия в этапе
+        c.execute("""
+            SELECT sp.part, p.cost, sp.quantity
+            FROM stage_products sp JOIN products p ON sp.product_id=p.id
+            WHERE sp.stage_id=?
+        """, (stage_id,))
+        for part, pcost, qty in c.fetchall():
+            mult = eff_meters if part == 'meter' else 1
+            if part == 'start':
+                start += pcost * qty * mult
+            elif part == 'meter':
+                meter += pcost * qty * mult
+            else:
+                end += pcost * qty * mult
+
+        # Материалы в этапе
+        c.execute("""
+            SELECT sm.part, m.type, m.price, sm.quantity, sm.length
+            FROM stage_materials sm JOIN materials m ON sm.material_id=m.id
+            WHERE sm.stage_id=?
+        """, (stage_id,))
+        for part, mtype, price, qty, length in c.fetchall():
+            mult = eff_meters if part == 'meter' else 1
+            if mtype == 'Пиломатериал' and length:
+                add = price * qty * float(length) * mult
+            else:
+                add = price * qty * mult
+            if part == 'start':
+                start += add
+            elif part == 'meter':
+                meter += add
+            else:
+                end += add
+
+        conn.close()
+        return start + meter + end
+
+    def _get_row_length_for_stage(self, stage_id: int) -> float:
+        # ищем строку в таблице заказа с этим stage_id и читаем колонку "Длина (м)"
+        for row in range(self.order_table.rowCount()):
+            if self.order_table.item(row, 0).text() == "Этап":
+                name_item = self.order_table.item(row, 1)
+                if int(name_item.data(Qt.UserRole)) == stage_id:
+                    # сначала смотрим сохранённое значение
+                    saved = name_item.data(Qt.UserRole + 2)
+                    if saved is not None:
+                        return float(saved)
+                    # иначе читаем из ячейки
+                    txt = self.order_table.item(row, 3).text() or "0"
+                    try:
+                        return float(txt)
+                    except Exception:
+                        return 0.0
+        return 0.0
 
     def _get_stage_materials(self, stage_id, quantity):
         materials_summary = defaultdict(float)
@@ -2070,35 +2224,38 @@ class OrdersTab(QWidget):
                 conn.close()
 
     def confirm_order(self):
-        """ИСПРАВЛЕНИЕ 1: Исправленное подтверждение заказа"""
+        """Подтверждение заказа с учётом длины этапов и сохранением length_meters"""
         try:
             if not self.current_order:
                 QMessageBox.warning(self, "Ошибка", "Заказ пуст")
                 return
 
-            total_cost = 0
+            total_cost = 0.0
             order_details = []
 
             for item_type, item_id, quantity in self.current_order:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
-
                 if item_type == "Изделие":
                     cursor.execute("SELECT name, cost FROM products WHERE id = ?", (item_id,))
                     name, cost = cursor.fetchone()
                     total_cost += cost * quantity
-                    order_details.append(('product', item_id, name, quantity, cost * quantity))
-                else:  # Этап
-                    cursor.execute("SELECT name, cost FROM stages WHERE id = ?", (item_id,))
-                    name, cost = cursor.fetchone()
-                    total_cost += cost * quantity
-                    order_details.append(('stage', item_id, name, quantity, cost * quantity))
+                    order_details.append(('product', item_id, name, quantity, cost * quantity, None))
+                else:
+                    cursor.execute("SELECT name FROM stages WHERE id = ?", (item_id,))
+                    row_stage = cursor.fetchone()
+                    name = row_stage if row_stage else f"Этап #{item_id}"
+                    length_m = self._get_row_length_for_stage(item_id)
+                    cost = self._compute_stage_cost(item_id, length_m)
+                    total_cost += cost
+                    order_details.append(('stage', item_id, name, 1, cost, length_m))
 
                 conn.close()
 
-            requirements = self._calculate_material_requirements()
-            stock_items = self._get_current_stock()
+            # Единая сборка требований для раскроя
+            _, requirements = self._expand_order_to_requirements()
 
+            stock_items = self._get_current_stock()
             optimizer = CuttingOptimizer()
             result = optimizer.optimize_cutting(requirements, stock_items, self.db_path)
 
@@ -2108,7 +2265,6 @@ class OrdersTab(QWidget):
                 return
 
             self._update_warehouse(result['updated_warehouse'])
-
             if hasattr(self.main_window, 'warehouse_tab'):
                 self.main_window.warehouse_tab.load_data()
 
@@ -2118,10 +2274,8 @@ class OrdersTab(QWidget):
 
             self.clear_order()
             self.load_order_history()
-
             self.instructions_text.setText("Заказ подтвержден, PDF-отчёт сформирован.\nСклад был обновлен.")
             QMessageBox.information(self, "Успех", "Заказ успешно подтвержден!")
-
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла критическая ошибка: {str(e)}")
 
@@ -2147,35 +2301,42 @@ class OrdersTab(QWidget):
             conn.close()
 
     def _save_order_to_db(self, total_cost, order_details, instructions_text):
-        """ИСПРАВЛЕНИЕ 1: Исправленное сохранение заказа с этапами"""
+        """Сохранение заказа, включая длину этапов в order_items.length_meters"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         order_id = None
 
         try:
-            cursor.execute("INSERT INTO orders (order_date, total_cost, instructions) VALUES (datetime('now'), ?, ?)",
-                         (total_cost, instructions_text))
+            cursor.execute(
+                "INSERT INTO orders (order_date, total_cost, instructions) VALUES (datetime('now'), ?, ?)",
+                (total_cost, instructions_text)
+            )
             order_id = cursor.lastrowid
 
-            for item_type, item_id, name, quantity, cost in order_details:
+            # order_details: (item_type, item_id, name, quantity, cost, length_meters_or_None)
+            for item_type, item_id, name, quantity, cost, length_m in order_details:
                 if item_type == 'product':
-                    cursor.execute("""INSERT INTO order_items 
-                    (order_id, product_id, stage_id, quantity, product_name, cost, item_type) 
-                    VALUES (?, ?, NULL, ?, ?, ?, ?)""",
-                                 (order_id, item_id, quantity, name, cost, 'product'))
-                else:  # stage
-                    cursor.execute("""INSERT INTO order_items 
-                    (order_id, product_id, stage_id, quantity, product_name, cost, item_type) 
-                    VALUES (?, NULL, ?, ?, ?, ?, ?)""",
-                                 (order_id, item_id, quantity, name, cost, 'stage'))
-
+                    name = str(name)
+                    cursor.execute(
+                        """INSERT INTO order_items
+                        (order_id, product_id, stage_id, quantity, length_meters, product_name, cost, item_type)
+                        VALUES (?, ?, NULL, ?, NULL, ?, ?, ?)""",
+                        (order_id, item_id, quantity, name, cost, 'product')
+                    )
+                else:
+                    name = str(name)
+                    cursor.execute(
+                        """INSERT INTO order_items
+                        (order_id, product_id, stage_id, quantity, length_meters, product_name, cost, item_type)
+                        VALUES (?, NULL, ?, ?, ?, ?, ?, ?)""",
+                        (order_id, item_id, 1, length_m, name, cost, 'stage')
+                    )
             conn.commit()
         except sqlite3.Error as e:
             QMessageBox.critical(self, "Ошибка базы данных", f"Ошибка при сохранении заказа: {str(e)}")
             conn.rollback()
         finally:
             conn.close()
-
         return order_id
 
     def _generate_pdf(self, order_id, total_cost, order_details, requirements, instructions_text):
@@ -2185,10 +2346,8 @@ class OrdersTab(QWidget):
             else:
                 pdf_dir = os.path.join(os.path.dirname(self.db_path), 'orders')
 
-            # ИСПРАВЛЕНИЕ: Убеждаемся что папка orders создана
             if not os.path.exists(pdf_dir):
                 os.makedirs(pdf_dir)
-                print(f"Создана папка для PDF отчетов: {pdf_dir}")
 
             pdf_filename = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_order.pdf"
             pdf_path = os.path.join(pdf_dir, pdf_filename)
@@ -2201,36 +2360,14 @@ class OrdersTab(QWidget):
 
             doc = SimpleDocTemplate(pdf_path, pagesize=letter)
             styles = getSampleStyleSheet()
-
-            # ИСПРАВЛЕНИЕ: Используем зарегистрированный Arial шрифт
             if ARIAL_FONT_REGISTERED:
-                # Создаем пользовательские стили с Arial
                 from reportlab.lib.styles import ParagraphStyle
-                
-                title_style = ParagraphStyle(
-                    'CustomTitle',
-                    parent=styles['Title'],
-                    fontName='Arial',
-                    fontSize=16,
-                    spaceAfter=12
-                )
-                
-                heading_style = ParagraphStyle(
-                    'CustomHeading',
-                    parent=styles['Heading2'], 
-                    fontName='Arial',
-                    fontSize=14,
-                    spaceAfter=6
-                )
-                
-                normal_style = ParagraphStyle(
-                    'CustomNormal',
-                    parent=styles['Normal'],
-                    fontName='Arial',
-                    fontSize=12
-                )
+                title_style = ParagraphStyle('CustomTitle', parent=styles['Title'], fontName='Arial', fontSize=16,
+                                             spaceAfter=12)
+                heading_style = ParagraphStyle('CustomHeading', parent=styles['Heading2'], fontName='Arial',
+                                               fontSize=14, spaceAfter=6)
+                normal_style = ParagraphStyle('CustomNormal', parent=styles['Normal'], fontName='Arial', fontSize=12)
             else:
-                # Fallback на стандартные стили
                 title_style = styles['Title']
                 heading_style = styles['Heading2']
                 normal_style = styles['Normal']
@@ -2244,11 +2381,43 @@ class OrdersTab(QWidget):
             story.append(Paragraph(f"Цена реализации: {sale_price:.2f} руб", heading_style))
             story.append(Spacer(1, 12))
 
+            # Состав заказа (печатаем длину для этапов)
             story.append(Paragraph("Состав заказа:", heading_style))
-            for item_type, _, name, quantity, _ in order_details:
+            for item_type, _, name, quantity, cost, length_m in order_details:
                 type_text = "Изделие" if item_type == 'product' else "Этап"
-                story.append(Paragraph(f"- {name} ({type_text}): {quantity} шт", normal_style))
+                line = f"- {name} ({type_text}): {quantity} шт"
+                if item_type == 'stage' and length_m:
+                    line += f", длина {length_m:.2f} м"
+                story.append(Paragraph(line, normal_style))
 
+            # Сводка материалов (агрегировано)
+            story.append(Spacer(1, 12))
+            story.append(Paragraph("Сводка материалов:", heading_style))
+            material_types = CuttingOptimizer._get_material_types(self.db_path)
+
+            totals_lumber = {}  # м
+            totals_fasteners = {}  # шт
+            for material, items in requirements.items():
+                is_lumber = material_types.get(material) == "Пиломатериал"
+                total = 0.0
+                for val, _ in items:
+                    total += float(val)
+                if is_lumber:
+                    totals_lumber[material] = totals_lumber.get(material, 0.0) + total
+                else:
+                    totals_fasteners[material] = totals_fasteners.get(material, 0.0) + total
+
+            if totals_lumber:
+                story.append(Paragraph("Пиломатериалы:", normal_style))
+                for mat, amount in sorted(totals_lumber.items()):
+                    story.append(Paragraph(f"• {mat}: {amount:.2f} м", normal_style))
+
+            if totals_fasteners:
+                story.append(Paragraph("Метизы:", normal_style))
+                for mat, amount in sorted(totals_fasteners.items()):
+                    story.append(Paragraph(f"• {mat}: {amount:.0f} шт", normal_style))
+
+            # Инструкции распила (уже отфильтрованы от тросов)
             if instructions_text:
                 story.append(Spacer(1, 12))
                 story.append(Paragraph("Инструкции:", heading_style))
@@ -2256,16 +2425,20 @@ class OrdersTab(QWidget):
 
             doc.build(story)
             QMessageBox.information(self, "PDF", f"PDF заказа сохранён: {pdf_path}")
-
         except Exception as e:
             print(f"Ошибка при генерации PDF: {str(e)}")
 
     def _generate_instructions_text(self, total_cost, result, requirements):
         instructions = ""
         material_types = CuttingOptimizer._get_material_types(self.db_path)
+        skip_cut_instructions = {"Трос М8", "Трос М10", "Трос М12"}  # не выводим распил для этих материалов
 
         if result.get('cutting_instructions'):
             for material, material_instructions in result['cutting_instructions'].items():
+                # Скрыть раздел распила для тросов
+                if material in skip_cut_instructions:
+                    continue
+                # Метизы также не имеют распила
                 if material_types.get(material) == "Метиз":
                     continue
 
@@ -2275,7 +2448,6 @@ class OrdersTab(QWidget):
 
         if not instructions.strip():
             instructions = "Инструкции по распилу не требуются."
-
         return instructions.strip()
 
     def load_order_history(self):

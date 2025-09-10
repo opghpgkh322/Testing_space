@@ -14,7 +14,7 @@ def check_table_structure(cursor, table_name, expected_columns):
 
 
 def create_database(db_path):
-    """Создает базу данных и таблицы с поддержкой этапов"""
+    """Создает базу данных и таблицы с поддержкой этапов и их частей"""
     data_dir = os.path.dirname(db_path)
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
@@ -51,18 +51,20 @@ def create_database(db_path):
         FOREIGN KEY (product_id) REFERENCES products(id),
         FOREIGN KEY (material_id) REFERENCES materials(id))""")
 
-    # НОВЫЕ ТАБЛИЦЫ ДЛЯ ЭТАПОВ
+    # Таблицы этапов
     cursor.execute("""CREATE TABLE IF NOT EXISTS stages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         cost REAL NOT NULL DEFAULT 0.0,
         description TEXT)""")
 
+    # ВНИМАНИЕ: теперь в составе этапа указываем часть (start/meter/end)
     cursor.execute("""CREATE TABLE IF NOT EXISTS stage_products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         stage_id INTEGER NOT NULL,
         product_id INTEGER NOT NULL,
         quantity INTEGER NOT NULL,
+        part TEXT NOT NULL DEFAULT 'meter' CHECK(part IN ('start','meter','end')),
         FOREIGN KEY (stage_id) REFERENCES stages(id),
         FOREIGN KEY (product_id) REFERENCES products(id))""")
 
@@ -72,6 +74,7 @@ def create_database(db_path):
         material_id INTEGER NOT NULL,
         quantity INTEGER NOT NULL,
         length REAL,
+        part TEXT NOT NULL DEFAULT 'meter' CHECK(part IN ('start','meter','end')),
         FOREIGN KEY (stage_id) REFERENCES stages(id),
         FOREIGN KEY (material_id) REFERENCES materials(id))""")
 
@@ -82,30 +85,24 @@ def create_database(db_path):
         instructions TEXT,
         pdf_filename TEXT)""")
 
-    # ИСПРАВЛЕНИЕ 1: Пересоздаем таблицу order_items с правильной схемой
-    # Сначала проверяем, есть ли таблица
+    # Пересоздание order_items с правильной схемой, если старая версия
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='order_items'")
     table_exists = cursor.fetchone()
-
+    existing_data = []
     if table_exists:
-        # Сохраняем существующие данные
+        cursor.execute("PRAGMA table_info(order_items)")
+        old_columns = [col[1] for col in cursor.fetchall()]  # фикс индексации
         cursor.execute("SELECT * FROM order_items")
         existing_data = cursor.fetchall()
-
-        # Получаем структуру старой таблицы
-        cursor.execute("PRAGMA table_info(order_items)")
-        old_columns = [col[1] for col in cursor.fetchall()]
-
-        # Удаляем старую таблицу
         cursor.execute("DROP TABLE order_items")
 
-    # Создаем новую таблицу с правильной схемой
-    cursor.execute("""CREATE TABLE order_items (
+    cursor.execute("""CREATE TABLE IF NOT EXISTS order_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_id INTEGER NOT NULL,
         product_id INTEGER,
         stage_id INTEGER,
         quantity INTEGER NOT NULL,
+        length_meters REAL,
         product_name TEXT NOT NULL DEFAULT '',
         cost REAL NOT NULL DEFAULT 0.0,
         item_type TEXT NOT NULL DEFAULT 'product' CHECK(item_type IN ('product', 'stage')),
@@ -113,26 +110,30 @@ def create_database(db_path):
         FOREIGN KEY (product_id) REFERENCES products(id),
         FOREIGN KEY (stage_id) REFERENCES stages(id))""")
 
-    # Восстанавливаем данные если были
-    if table_exists and existing_data:
+    # Восстановление данных при пересоздании (если была старая таблица)
+    if existing_data:
         for row in existing_data:
-            # Адаптируем старые данные к новой структуре
-            if len(row) >= 7:  # Если есть все основные поля
-                cursor.execute("""INSERT INTO order_items 
-                                (id, order_id, product_id, quantity, product_name, cost, item_type)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                             (row[0], row[1], row[2], row[4], row[5], row[6], 'product'))
-
+            try:
+                if len(row) >= 7:
+                    cursor.execute("""INSERT INTO order_items
+                        (id, order_id, product_id, quantity, product_name, cost, item_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                                   (row, row[1], row[10], row[11], row[9], row[12], 'product'))
+            except Exception:
+                pass
     conn.commit()
 
-    # Проверяем и добавляем отсутствующие столбцы для других таблиц
+    # Миграция недостающих столбцов на существующих БД
     try:
-        check_table_structure(cursor, "orders", {
-            "pdf_filename": "TEXT"
-        })
+        check_table_structure(cursor, "orders", {"pdf_filename": "TEXT"})
+        check_table_structure(cursor, "stage_products", {"part": "TEXT NOT NULL DEFAULT 'meter'"})
+        check_table_structure(cursor, "stage_materials", {"part": "TEXT NOT NULL DEFAULT 'meter'"})
+        check_table_structure(cursor, "order_items", {"length_meters": "REAL"})
         conn.commit()
     except sqlite3.Error as e:
         print(f"Ошибка при обновлении таблиц: {e}")
         conn.rollback()
     finally:
         conn.close()
+
+
