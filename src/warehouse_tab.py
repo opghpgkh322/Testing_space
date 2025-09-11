@@ -8,7 +8,7 @@ import subprocess
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QFormLayout, QComboBox,
     QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
-    QHBoxLayout, QMessageBox
+    QHBoxLayout, QMessageBox, QHeaderView
 )
 from PyQt5.QtCore import Qt
 from utils import fetch_all, execute
@@ -51,7 +51,7 @@ class WarehouseTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["ID", "Материал", "Длина", "Количество"])
-        self.table.horizontalHeader().setSectionResizeMode(Qt.Horizontal)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.table)
 
         # Кнопки удаления и Git

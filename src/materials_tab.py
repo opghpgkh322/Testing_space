@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from utils import fetch_all, execute
 from config import Config
+from PyQt5.QtWidgets import QHeaderView
 
 
 class MaterialsTab(QWidget):
@@ -30,7 +31,7 @@ class MaterialsTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["ID", "Название", "Тип", "Цена"])
-        self.table.horizontalHeader().setSectionResizeMode(Qt.Horizontal)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.cellClicked.connect(self.on_table_cell_clicked)
         layout.addWidget(self.table)
 

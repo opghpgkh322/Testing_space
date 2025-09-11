@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QLineEdit, QPushButton, QLabel, QComboBox, QMessageBox,
     QHBoxLayout
 )
+from PyQt5.QtWidgets import QHeaderView
 from PyQt5.QtCore import Qt
 from utils import fetch_all, execute
 from config import Config
@@ -34,7 +35,7 @@ class ProductsTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["ID", "Название", "Себестоимость"])
-        self.table.horizontalHeader().setSectionResizeMode(Qt.Horizontal)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.cellClicked.connect(self.on_product_selected)
         layout.addWidget(self.table)
 
@@ -67,7 +68,7 @@ class ProductsTab(QWidget):
         self.comp_table.setHorizontalHeaderLabels(
             ["ID", "Материал", "Тип", "Количество", "Длина"]
         )
-        self.comp_table.horizontalHeader().setSectionResizeMode(Qt.Horizontal)
+        self.comp_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         comp_layout.addWidget(self.comp_table)
 
         form2 = QFormLayout()

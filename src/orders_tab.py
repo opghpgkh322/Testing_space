@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QFormLayout, QComboBox, QSpinBox, QDoubleSpinBox, QPushButton,
     QLabel, QTextEdit, QMessageBox, QHBoxLayout, QDialog
 )
+from PyQt5.QtWidgets import QHeaderView
 from PyQt5.QtCore import Qt
 from utils import fetch_all, execute
 from cutting_optimizer import CuttingOptimizer
@@ -40,7 +41,7 @@ class OrdersTab(QWidget):
         self.order_table = QTableWidget()
         self.order_table.setColumnCount(6)
         self.order_table.setHorizontalHeaderLabels(["Тип","Название","Кол-во","Длина","Себестоимость","Действия"])
-        self.order_table.horizontalHeader().setSectionResizeMode(Qt.Horizontal)
+        self.order_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         og_layout.addWidget(self.order_table)
 
         # Форма добавления
@@ -97,7 +98,7 @@ class OrdersTab(QWidget):
         self.hist_table = QTableWidget()
         self.hist_table.setColumnCount(4)
         self.hist_table.setHorizontalHeaderLabels(["ID","Дата","Позиций","Сумма"])
-        self.hist_table.horizontalHeader().setSectionResizeMode(Qt.Horizontal)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.hist_table.cellDoubleClicked.connect(self.show_order_details)
         hg_layout.addWidget(self.hist_table)
 
