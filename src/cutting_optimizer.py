@@ -1,262 +1,232 @@
-# cutting_optimizer.py
-import json
-import sqlite3
-from collections import defaultdict
-
 class CuttingOptimizer:
-    MIN_LENGTH = 0.3  # Минимальный полезный остаток
+    """Оптимизатор раскроя пиломатериалов"""
 
-    @staticmethod
-    def optimize_cutting(requirements, stock_items, db_path):
+    def __init__(self):
+        self.waste_threshold = 0.3  # Минимальный остаток, который считается полезным (в метрах)
+
+    def optimize(self, available_lengths, required_lengths):
         """
-        Оптимизирует раскрой материалов для заданных требований.
+        Оптимизация раскроя досок
 
-        :param requirements: Список требований по материалам
-        :param stock_items: Доступные материалы на складе
-        :param db_path: Путь к базе данных
-        :return: Результат проверки и оптимизации
+        Args:
+            available_lengths: Список доступных длин досок [6.0, 6.0, 4.5, ...]
+            required_lengths: Список необходимых отрезков [2.5, 1.8, 0.75, ...]
+
+        Returns:
+            dict: Результат оптимизации с планом раскроя
         """
-        print(f"[DEBUG] Требования: {dict(requirements)}")
-        print(f"[DEBUG] Склад: {stock_items}")
+        # Сортируем необходимые длины по убыванию для более эффективного размещения
+        required_sorted = sorted(required_lengths, reverse=True)
+        available_sorted = sorted(available_lengths, reverse=True)
 
-        # Создаем копию склада для работы
-        warehouse = defaultdict(list)
-        for item in stock_items:
-            material_name = item[0]
-            # Пропускаем материалы с нулевым количеством
-            if item[2] <= 0:
-                continue
-            warehouse[material_name].append({
-                'length': item[1],
-                'quantity': item[2],
-                'original_length': item[1]
-            })
+        used_boards = []
+        cutting_plan = []
+        remaining_boards = available_sorted.copy()
+        uncut_requirements = required_sorted.copy()
 
-        # Словари для результатов
-        cutting_instructions = defaultdict(list)
-        updated_warehouse = []
-        missing_materials = []
-        can_produce = True
+        # Основной алгоритм оптимизации
+        for required_length in required_sorted:
+            best_board_idx = None
+            best_waste = float('inf')
 
-        # Получаем типы материалов из БД
-        material_types = CuttingOptimizer._get_material_types(db_path)
+            # Ищем наиболее подходящую доску (с минимальными отходами)
+            for i, available_length in enumerate(remaining_boards):
+                if available_length >= required_length:
+                    waste = available_length - required_length
+                    if waste < best_waste:
+                        best_waste = waste
+                        best_board_idx = i
 
-        # Проверяем наличие всех требуемых материалов
-        for material in requirements.keys():
-            # Если материала нет на складе или его количество равно 0
-            if material not in warehouse or not warehouse[material]:
-                # Получаем общее количество этого материала на складе (включая нулевые)
-                total_available = sum(item[2] for item in stock_items if item[0] == material)
+            if best_board_idx is not None:
+                # Используем найденную доску
+                board_length = remaining_boards[best_board_idx]
+                used_boards.append(board_length)
 
-                # Рассчитываем общее требуемое количество
-                total_required = sum(req[0] for req in requirements[material])
+                # Планируем раскрой этой доски
+                cuts_on_board = [required_length]
+                remaining_length = board_length - required_length
+                uncut_requirements.remove(required_length)
 
-                if total_available < total_required:
-                    missing_materials.append(f"{material}: требуется {total_required}, доступно {total_available}")
-                    can_produce = False
-                # Если материал есть, но количество равно 0
-                elif total_available == 0:
-                    missing_materials.append(f"{material}: отсутствует на складе")
-                    can_produce = False
+                # Пытаемся разместить на этой же доске другие отрезки
+                for other_req in uncut_requirements[:]:
+                    if remaining_length >= other_req:
+                        cuts_on_board.append(other_req)
+                        remaining_length -= other_req
+                        uncut_requirements.remove(other_req)
 
-        # Обрабатываем каждый материал
-        for material, req_list in requirements.items():
-            print(f"[DEBUG] Обрабатываем материал: {material}, требования: {req_list}")
+                cutting_plan.append((board_length, cuts_on_board))
+                remaining_boards.pop(best_board_idx)
 
-            # Пропускаем материалы, которых нет на складе
-            if material not in warehouse or not warehouse[material]:
-                continue
+        # Рассчитываем статистику
+        total_waste = sum(
+            board_length - sum(cuts)
+            for board_length, cuts in cutting_plan
+        )
 
-            if material_types.get(material) == "Метиз":
-                # Обработка метизов
-                result = CuttingOptimizer._process_fastener(
-                    material, req_list, warehouse[material])
-                cutting_instructions[material] = result['instructions']
-                if not result['success']:
-                    can_produce = False
-                    missing_materials.append(result['message'])
-                updated_warehouse.extend(result['updated'])
+        efficiency = (
+            (sum(required_lengths) / sum(board_length for board_length, _ in cutting_plan)) * 100
+            if cutting_plan else 0
+        )
+
+        return {
+            'cutting_plan': cutting_plan,
+            'used_boards': used_boards,
+            'remaining_boards': remaining_boards,
+            'total_waste': total_waste,
+            'efficiency_percent': efficiency,
+            'uncut_requirements': uncut_requirements,
+            'success': len(uncut_requirements) == 0
+        }
+
+    def optimize_multiple_materials(self, materials_requirements):
+        """
+        Оптимизация раскроя для нескольких типов материалов
+
+        Args:
+            materials_requirements: dict вида {
+                'Брус 100x100': {
+                    'available': [6.0, 6.0, 4.5],
+                    'required': [2.5, 1.8, 0.75]
+                }
+            }
+
+        Returns:
+            dict: Результаты оптимизации для каждого материала
+        """
+        results = {}
+
+        for material_name, data in materials_requirements.items():
+            available = data.get('available', [])
+            required = data.get('required', [])
+
+            if available and required:
+                results[material_name] = self.optimize(available, required)
             else:
-                # Обработка пиломатериалов
-                result = CuttingOptimizer._process_lumber(
-                    material, req_list, warehouse[material])
-                print(f"[DEBUG] Результат обработки пиломатериала {material}: {result}")
+                results[material_name] = {
+                    'cutting_plan': [],
+                    'used_boards': [],
+                    'remaining_boards': available,
+                    'total_waste': 0,
+                    'efficiency_percent': 0,
+                    'uncut_requirements': required,
+                    'success': len(required) == 0
+                }
 
-                if not result['success']:
-                    can_produce = False
-                    missing_materials.extend(result['missing'])
-                cutting_instructions[material] = result['instructions']
-                updated_warehouse.extend(result['updated'])
+        return results
 
-        # Добавляем материалы, не участвовавшие в заказе
-        processed_materials = set(requirements.keys())
-        for mat, length, qty in stock_items:
-            if mat not in processed_materials and qty > 0:
-                updated_warehouse.append([mat, length, qty])
+    def get_cutting_instructions(self, optimization_result):
+        """
+        Получить текстовые инструкции по раскрою
 
-        # Округление всех длин до 2 знаков
-        updated_warehouse = [[mat, round(len_val, 2), qty] for mat, len_val, qty in updated_warehouse]
+        Args:
+            optimization_result: Результат работы optimize()
 
-        # Сортировка по названию материала и длине (от большего к меньшему)
-        updated_warehouse.sort(key=lambda x: (x[0], -x[1]))
-
-        return {
-            'can_produce': can_produce,
-            'missing': missing_materials,
-            'updated_warehouse': updated_warehouse,
-            'cutting_instructions': dict(cutting_instructions)
-        }
-
-    @staticmethod
-    def _get_material_types(db_path):
-        """Возвращает типы материалов из БД"""
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, type FROM materials")
-        material_types = {}
-        for name, mtype in cursor.fetchall():
-            material_types[name] = mtype
-        conn.close()
-        return material_types
-
-    @staticmethod
-    def _process_lumber(material, requirements, stock):
-        """Обработка пиломатериалов с оптимизацией раскроя и повторным использованием остатков"""
-        # Фильтруем требования: теперь храним (длина, изделие)
-        requirements = [req for req in requirements if req[0] > 0]
-
-        if not requirements:
-            return {
-                'success': True,
-                'instructions': [],
-                'updated': [],
-                'missing': []
-            }
-
-        # Сортируем требования по убыванию длины
-        requirements.sort(key=lambda x: x[0], reverse=True)
-        instructions = []
-        updated = []
-        missing_dict = defaultdict(float)  # Для сбора общей недостающей длины по изделиям
-
-        # Создаем список доступных досок
-        boards = []
-        for item in stock:
-            for _ in range(item['quantity']):
-                boards.append({
-                    'original_length': item['length'],
-                    'current_length': item['length'],
-                    'cuts': []  # История распилов для этой доски
-                })
-
-        # Сортируем доски по убыванию длины (для минимизации отходов)
-        boards.sort(key=lambda x: x['current_length'], reverse=True)
-
-        # Обрабатываем каждое требование
-        for req_length, product in requirements:
-            board_found = False
-
-            # Ищем доску с минимальным подходящим остатком
-            best_index = -1
-            best_remaining = float('inf')
-
-            for i, board in enumerate(boards):
-                if board['current_length'] >= req_length:
-                    remaining = board['current_length'] - req_length
-                    if remaining < best_remaining:
-                        best_remaining = remaining
-                        best_index = i
-
-            if best_index != -1:
-                board = boards[best_index]
-                board['current_length'] = round(board['current_length'] - req_length, 2)
-                board['cuts'].append({
-                    'length': req_length,
-                    'product': product
-                })
-                board_found = True
-
-            if not board_found:
-                # Собираем общую недостающую длину по изделиям
-                missing_dict[product] += req_length
-
-        # Формируем инструкции и остатки
-        for board in boards:
-            if board['cuts']:
-                instruction = f"Взять отрезок {board['original_length']:.2f}м:\n"
-                for i, cut in enumerate(board['cuts'], 1):
-                    instruction += f"  {i}. Отпилить {cut['length']:.2f}м для '{cut['product']}'\n"
-
-                if board['current_length'] >= CuttingOptimizer.MIN_LENGTH:
-                    instruction += f"  Остаток: {round(board['current_length'], 2):.2f}м\n"
-                else:
-                    instruction += f"  Остаток: {round(board['current_length'], 2):.2f}м (не используется)\n"
-
-                instructions.append(instruction)
-
-            if board['current_length'] >= CuttingOptimizer.MIN_LENGTH:
-                current_length_rounded = round(board['current_length'], 2)
-                # Группируем одинаковые остатки
-                found = False
-                for item in updated:
-                    if item[0] == material and abs(item[1] - current_length_rounded) < 0.01:
-                        item[2] += 1
-                        found = True
-                        break
-
-                if not found:
-                    updated.append([material, current_length_rounded, 1])
-
-        # Формируем сообщения о недостающих материалах с общей длиной
-        missing = []
-        if missing_dict:
-            total_missing = sum(missing_dict.values())
-            products_list = ", ".join([f"'{prod}'" for prod in missing_dict.keys()])
-            missing.append(f"{material}: не хватает {total_missing:.2f}м для изделий {products_list}")
-
-        return {
-            'success': len(missing) == 0,
-            'instructions': instructions,
-            'updated': updated,
-            'missing': missing
-        }
-
-
-    @staticmethod
-    def _process_fastener(material, requirements, stock):
-        """Обработка метизов с улучшенными инструкциями"""
-        # Извлекаем только количества из требований
-        quantities = [req[0] for req in requirements]
-        total_required = sum(quantities)
-
-        total_available = sum(item['quantity'] for item in stock)
-
-        if total_available < total_required:
-            return {
-                'success': False,
-                'message': f"{material}: требуется {total_required}, доступно {total_available}",
-                'updated': [],
-                'instructions': []
-            }
-
-        # Обновляем остатки
-        updated = []
-        remaining = total_required
+        Returns:
+            str: Текст с инструкциями
+        """
         instructions = []
 
-        # Формируем инструкции с указанием изделий
-        for req in requirements:
-            qty, product = req
-            instructions.append(f"Использовано {qty} шт для '{product}'")
+        if not optimization_result['success']:
+            instructions.append("⚠️ ВНИМАНИЕ: Не все отрезки удалось разместить!")
+            instructions.append(f"Недостающие отрезки: {optimization_result['uncut_requirements']}")
+            instructions.append("")
 
-        # Обновляем складские остатки
-        if total_available - total_required > 0:
-            # Для метизов используем длину 0
-            updated.append([material, 0.0, total_available - total_required])  # Изменено на list
+        instructions.append("📏 ПЛАН РАСКРОЯ:")
+        instructions.append("=" * 50)
+
+        for i, (board_length, cuts) in enumerate(optimization_result['cutting_plan'], 1):
+            waste = board_length - sum(cuts)
+
+            instructions.append(f"Доска №{i} ({board_length:.2f}м):")
+            for j, cut in enumerate(cuts, 1):
+                instructions.append(f"  ✂️ Отрезок {j}: {cut:.2f}м")
+
+            if waste > self.waste_threshold:
+                instructions.append(f"  📦 Остаток: {waste:.2f}м (сохранить)")
+            elif waste > 0:
+                instructions.append(f"  🗑️ Отходы: {waste:.2f}м")
+
+            instructions.append("")
+
+        # Статистика
+        instructions.append("📊 СТАТИСТИКА:")
+        instructions.append("=" * 30)
+        instructions.append(f"Использовано досок: {len(optimization_result['used_boards'])}")
+        instructions.append(f"Осталось досок: {len(optimization_result['remaining_boards'])}")
+        instructions.append(f"Общие отходы: {optimization_result['total_waste']:.2f}м")
+        instructions.append(f"Эффективность: {optimization_result['efficiency_percent']:.1f}%")
+
+        return "\n".join(instructions)
+
+    def suggest_optimal_board_lengths(self, required_lengths, standard_lengths=None):
+        """
+        Предложение оптимальных длин досок для закупки
+
+        Args:
+            required_lengths: Список необходимых отрезков
+            standard_lengths: Стандартные длины досок в продаже
+
+        Returns:
+            dict: Рекомендации по закупке
+        """
+        if standard_lengths is None:
+            standard_lengths = [3.0, 4.0, 4.5, 6.0]
+
+        recommendations = {}
+
+        for std_length in standard_lengths:
+            # Тестируем оптимизацию с досками только этой длины
+            test_available = [std_length] * len(required_lengths)  # Достаточное количество
+            result = self.optimize(test_available, required_lengths)
+
+            recommendations[std_length] = {
+                'boards_needed': len(result['used_boards']),
+                'efficiency': result['efficiency_percent'],
+                'total_waste': result['total_waste'],
+                'cost_factor': len(result['used_boards']) * std_length
+            }
+
+        # Находим наиболее эффективный вариант
+        best_option = max(
+            recommendations.items(),
+            key=lambda x: x[1]['efficiency'] - (x[1]['total_waste'] * 0.1)  # Штраф за отходы
+        )
 
         return {
-            'success': True,
-            'updated': updated,
-            'message': "",
-            'instructions': instructions
+            'recommendations': recommendations,
+            'best_option': best_option[0],
+            'best_efficiency': best_option[1]['efficiency']
+        }
+
+    def calculate_material_requirements(self, cutting_plan_result, material_price_per_meter):
+        """
+        Расчет стоимости материалов на основе плана раскроя
+
+        Args:
+            cutting_plan_result: Результат optimize()
+            material_price_per_meter: Цена за метр материала
+
+        Returns:
+            dict: Информация о стоимости
+        """
+        total_material_used = sum(
+            board_length for board_length, _ in cutting_plan_result['cutting_plan']
+        )
+
+        total_useful_length = sum(
+            sum(cuts) for _, cuts in cutting_plan_result['cutting_plan']
+        )
+
+        material_cost = total_material_used * material_price_per_meter
+        effective_cost = total_useful_length * material_price_per_meter
+        waste_cost = cutting_plan_result['total_waste'] * material_price_per_meter
+
+        return {
+            'total_material_meters': total_material_used,
+            'useful_meters': total_useful_length,
+            'waste_meters': cutting_plan_result['total_waste'],
+            'total_cost': material_cost,
+            'effective_cost': effective_cost,
+            'waste_cost': waste_cost,
+            'cost_per_useful_meter': material_cost / total_useful_length if total_useful_length > 0 else 0
         }
