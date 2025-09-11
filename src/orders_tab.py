@@ -98,7 +98,7 @@ class OrdersTab(QWidget):
         self.hist_table = QTableWidget()
         self.hist_table.setColumnCount(4)
         self.hist_table.setHorizontalHeaderLabels(["ID","Дата","Позиций","Сумма"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.hist_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.hist_table.cellDoubleClicked.connect(self.show_order_details)
         hg_layout.addWidget(self.hist_table)
 
