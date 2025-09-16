@@ -1,33 +1,46 @@
-# main.py - Точка входа приложения
-"""
-Запускает Qt приложение, инициализирует БД и главное окно.
-"""
+# main.py - исправленная версия без тестовых этапов
 import sys
+import os
+from gui import MainWindow
 from PyQt5.QtWidgets import QApplication
-from config import DatabaseConfig, Config
-from database import create_database
-from main_window import MainWindow
+from database import create_database, add_stage_category_column
 
 
-def main():
-    # Инициализация базы данных
-    create_database()
-    
-    # Создаем Qt приложение
+def get_db_path():
+    """Возвращает абсолютный путь к базе данных"""
+    if getattr(sys, 'frozen', False):
+        # Если приложение запущено как собранный exe
+        base_dir = os.path.dirname(sys.executable)
+        db_path = os.path.join(base_dir, 'data', 'database.db')
+    else:
+        # Если приложение запущено из исходного кода
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        db_path = os.path.join(base_dir, '..', 'data', 'database.db')
+
+    # Преобразуем путь к абсолютному и нормализуем
+    db_path = os.path.abspath(db_path)
+    data_dir = os.path.dirname(db_path)
+
+    # Создаем папку data, если она не существует
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    return db_path
+
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    # Путь к БД
-    db_path = DatabaseConfig.get_db_path()
-    
-    # Создаем и показываем главное окно
+    db_path = get_db_path()
+
+    # Проверяем существование папки data
+    data_dir = os.path.dirname(db_path)
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+
+    create_database(db_path)
+    add_stage_category_column(db_path)
+
+
     window = MainWindow(db_path)
-    window.setWindowTitle(Config.APP_NAME)
-    window.resize(Config.WINDOW_WIDTH, Config.WINDOW_HEIGHT)
     window.show()
-    
-    # Запуск цикла событий
     sys.exit(app.exec_())
-
-
-if __name__ == '__main__':
-    main()
