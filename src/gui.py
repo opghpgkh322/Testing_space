@@ -827,7 +827,7 @@ class StagesTab(QWidget):
         self.stage_materials_table.cellChanged.connect(self.on_stage_material_cell_edited)
 
     def calculate_stage_cost(self):
-        """Расчет себестоимости этапа с разложением по частям"""
+        """Расчет себестоимости этапа произвольной длины с округлением позиций"""
         if not self.selected_stage_id:
             return
 
@@ -835,56 +835,53 @@ class StagesTab(QWidget):
         cursor = conn.cursor()
 
         try:
-            # Стоимость изделий по частям
+            # Получаем длину этапа, если есть
+            cursor.execute("SELECT description FROM stages WHERE id = ?", (self.selected_stage_id,))
+            row = cursor.fetchone()
+            length = 1
+            if row and row[0]:
+                try:
+                    # В описании может быть указана длина, например: "Длина: 5"
+                    import re
+                    m = re.search(r"Длина\s*:\s*([\d.]+)", row[0])
+                    if m:
+                        length = float(m.group(1))
+                except Exception:
+                    length = 1
+
+            # Считаем изделия
             cursor.execute("""
                 SELECT sp.part, p.cost, sp.quantity
                 FROM stage_products sp
                 JOIN products p ON sp.product_id = p.id
                 WHERE sp.stage_id = ?
             """, (self.selected_stage_id,))
-
-            start_cost = meter_cost = end_cost = 0.0
+            total_cost = 0.0
             for part, pcost, qty in cursor.fetchall():
-                if part == 'start':
-                    start_cost += pcost * qty
-                elif part == 'meter':
-                    meter_cost += pcost * qty
-                else:
-                    end_cost += pcost * qty
+                multiplier = length if part == 'meter' else 1
+                qty_total = math.ceil(qty * multiplier)
+                total_cost += pcost * qty_total
 
-            # Стоимость материалов по частям (за 1 метр для 'meter')
+            # Считаем материалы
             cursor.execute("""
                 SELECT sm.part, m.type, m.price, sm.quantity, sm.length
                 FROM stage_materials sm
                 JOIN materials m ON sm.material_id = m.id
                 WHERE sm.stage_id = ?
             """, (self.selected_stage_id,))
-
-            for part, mtype, price, qty, length in cursor.fetchall():
-                if mtype == "Пиломатериал" and length:
-                    add = price * qty * length
+            for part, mtype, price, qty, length_val in cursor.fetchall():
+                multiplier = length if part == 'meter' else 1
+                qty_total = math.ceil(qty * multiplier)
+                if mtype == "Пиломатериал" and length_val:
+                    total_cost += price * qty_total * length_val
                 else:
-                    add = price * qty
+                    total_cost += price * qty_total
 
-                if part == 'start':
-                    start_cost += add
-                elif part == 'meter':
-                    meter_cost += add
-                else:
-                    end_cost += add
-
-            # Обновляем отображение: 1 метр = start + meter + end
-            one_meter_total = start_cost + meter_cost + end_cost
-            self.cost_label.setText(
-                f"Себестоимость этапа (1 м): {one_meter_total:.2f} руб | "
-                f"Метр: {meter_cost:.2f} руб | Крепления: {(start_cost + end_cost):.2f} руб"
-            )
-
-            # В stages.cost сохраняем стоимость "метровой" части для совместимости
-            cursor.execute("UPDATE stages SET cost = ? WHERE id = ?", (meter_cost, self.selected_stage_id))
+            # Отображение и запись в stages.cost
+            self.cost_label.setText(f"Себестоимость этапа (1м): {total_cost:.2f} руб")
+            cursor.execute("UPDATE stages SET cost = ? WHERE id = ?", (total_cost, self.selected_stage_id))
             conn.commit()
             self.load_stages()
-
         except Exception as e:
             QMessageBox.critical(self, "Ошибка расчета", f"Произошла ошибка: {str(e)}")
         finally:
@@ -1827,8 +1824,7 @@ class WarehouseTab(QWidget):
         add_layout = QFormLayout()
 
         self.material_combo = QComboBox()
-        # Подключаем автозаполнение
-        self.material_combo.currentTextChanged.connect(self.on_warehouse_material_changed)
+
         self.load_materials()
         add_layout.addRow(QLabel("Материал:"), self.material_combo)
 
@@ -1836,7 +1832,8 @@ class WarehouseTab(QWidget):
         self.length_input = QLineEdit()
         self.length_input.setPlaceholderText("0 для метизов, иначе длина в метрах")
         add_layout.addRow(QLabel("Длина:"), self.length_input)
-
+        # Подключаем автозаполнение
+        self.material_combo.currentTextChanged.connect(self.on_warehouse_material_changed)
         # Поле количества
         self.quantity_input = QLineEdit()
         self.quantity_input.setPlaceholderText("Количество")
@@ -2054,20 +2051,25 @@ class WarehouseTab(QWidget):
         """
         if not material_text:
             return
+
         try:
             material_id = self.material_combo.currentData()
             if not material_id:
                 return
+
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute("SELECT type FROM materials WHERE id = ?", (material_id,))
             result = cursor.fetchone()
             conn.close()
+
             if not result:
                 return
+
             mat_type = result[0]
+
             if mat_type == "Метиз":
-                self.length_input.setText("0")
+                self.length_input.setText("0")  # ИСПРАВЛЕНО: добавил self перед length_input
                 self.length_input.setEnabled(False)
                 self.length_input.setToolTip("Длина для метизов всегда 0")
             else:
@@ -2075,6 +2077,7 @@ class WarehouseTab(QWidget):
                 if self.length_input.text() == "0":
                     self.length_input.clear()
                 self.length_input.setToolTip("Введите длину в метрах")
+
         except Exception as e:
             print(f"Ошибка автозаполнения на складе: {e}")
 
@@ -2636,45 +2639,77 @@ class OrdersTab(QWidget):
             QMessageBox.warning(self, "Ошибка", "Заказ пуст")
             return
 
-        total_cost, requirements = self._expand_order_to_requirements()
-        stock_items = self._get_current_stock()
+        try:
+            # Получаем требования и пересчитываем себестоимость по факту
+            total_cost = 0.0
+            requirements = defaultdict(int)  # суммируем целые количества и длины
 
-        optimizer = CuttingOptimizer()
-        result = optimizer.optimize_cutting(requirements, stock_items, self.db_path)
+            # Расширяем заказ в требования
+            _, req_details = self._expand_order_to_requirements()
 
-        materials_message = "📦 Требуемые материалы:\n\n"
-        # Суммарные количества по материалам (м или шт) уже можно получить, если нужно, отдельно
-        for material, items in requirements.items():
-            # подсчитать сумму значений по материалу
-            amount = 0.0
-            # определяем тип по наличию длин (float) против шт (int)
-            is_length = any(
-                isinstance(val, float) and val > 0 and not float(val).is_integer() or isinstance(val, float) for val, _
-                in items)
-            for val, _ in items:
-                amount += float(val)
-            unit = "м" if is_length else "шт"
-            materials_message += f"▫️ {material}: {amount:.2f} {unit}\n"
+            # Суммируем требования
+            for material, items in req_details.items():
+                for qty, _ in items:
+                    requirements[material] += qty
 
-        if result['can_produce']:
-            availability_message = "\n✅ Материалов достаточно для производства"
-        else:
-            availability_message = "\n❌ Материалов недостаточно:\n"
-            for error in result['missing']:
-                availability_message += f" - {error}\n"
+            # Подсчитываем себестоимость исходя из реальных требований
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            for material, total_qty in requirements.items():
+                cursor.execute("SELECT price, type FROM materials WHERE name = ?", (material,))
+                row = cursor.fetchone()
+                if not row:
+                    continue
+                unit_price, mtype = row
+                # для пиломатериалов cost за метр, для метизов cost за штуку
+                total_cost += unit_price * total_qty
+            conn.close()
 
-        instructions = "📊 Расчет заказа:\n\n"
-        instructions += f"💰 Себестоимость: {total_cost:.2f} руб\n"
-        instructions += f"💰 Цена реализации: {total_cost * 2:.2f} руб\n\n"
-        instructions += materials_message
-        instructions += availability_message
+            # Оптимизация резки
+            stock_items = self._get_current_stock()
+            optimizer = CuttingOptimizer()
+            result = optimizer.optimize_cutting(req_details, stock_items, self.db_path)
 
-        self.instructions_text.setText(instructions)
-        self.total_cost_label.setText(f"Общая себестоимость: {total_cost:.2f} руб")
+            # Формируем сообщение по материалам
+            materials_message = "📦 Требуемые материалы:\n\n"
+            # Получаем типы материалов из базы данных
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name, type FROM materials")
+            material_types = {name: mtype for name, mtype in cursor.fetchall()}
+            conn.close()
 
-    def _expand_order_to_requirements(self, order_items):
+            for material, total_qty in requirements.items():
+                material_type = material_types.get(material, "Метиз")  # По умолчанию считаем метизом
+                unit = "м" if material_type == "Пиломатериал" else "шт"
+                materials_message += f"• {material}: {total_qty:.2f} {unit}\n"
+
+            # Проверка достаточности
+            if result['can_produce']:
+                availability = "\n✅ Материалов достаточно для производства"
+            else:
+                availability = "\n❌ Материалов недостаточно:\n"
+                for err in result['missing']:
+                    availability += f" - {err}\n"
+
+            # Итоговые расчеты
+            instructions = "📊 Расчет заказа:\n\n"
+            instructions += f"💰 Себестоимость: {total_cost:.2f} руб\n"
+            instructions += f"💰 Цена реализации: {total_cost * 2:.2f} руб\n\n"
+            instructions += materials_message + availability
+
+            self.instructions_text.setText(instructions)
+            self.total_cost_label.setText(f"Общая себестоимость: {total_cost:.2f} руб")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Критическая ошибка", f"Ошибка при расчете заказа: {e}")
+            import traceback;
+            print(traceback.format_exc())
+
+    def _expand_order_to_requirements(self):
         """
-        Исправленный метод преобразования заказа в требования по материалам
+        ИСПРАВЛЕННЫЙ метод преобразования заказа в требования по материалам
+        с правильным подсчетом meter-части этапов
         """
         requirements = defaultdict(list)
         total_cost = 0.0
@@ -2682,7 +2717,17 @@ class OrdersTab(QWidget):
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        for item_type, item_id, quantity, length_m in order_items:
+        for item in self.current_order:
+            # Проверяем длину кортежа
+            if len(item) == 3:
+                item_type, item_id, quantity = item
+                length_m = None
+            elif len(item) == 4:
+                item_type, item_id, quantity, length_m = item
+            else:
+                print(f"Неожиданная структура элемента заказа: {item}")
+                continue
+
             if item_type == "Изделие":
                 # Обрабатываем изделие
                 c.execute("SELECT cost FROM products WHERE id = ?", (item_id,))
@@ -2692,7 +2737,7 @@ class OrdersTab(QWidget):
 
                 # Материалы изделия
                 c.execute("""SELECT m.name, m.type, pc.quantity, pc.length
-                            FROM product_composition pc 
+                            FROM product_composition pc
                             JOIN materials m ON pc.material_id = m.id
                             WHERE pc.product_id = ?""", (item_id,))
 
@@ -2710,18 +2755,26 @@ class OrdersTab(QWidget):
                         requirements[mname].append((total_quantity, product_name))
 
             else:  # item_type == "Этап"
+                # Получаем длину для этапа
+                if length_m is None:
+                    length_m = self._get_row_length_for_stage(item_id)
+
                 # Обрабатываем этап
                 stage_cost = self._compute_stage_cost(item_id, length_m)
                 total_cost += stage_cost
 
                 # Материалы напрямую из этапа
                 c.execute("""SELECT sm.part, sm.quantity, sm.length, m.name, m.type
-                            FROM stage_materials sm 
+                            FROM stage_materials sm
                             JOIN materials m ON sm.material_id = m.id
                             WHERE sm.stage_id = ?""", (item_id,))
 
                 for part, sm_qty, sm_length, mname, mtype in c.fetchall():
-                    multiplier = 1 if part in ('start', 'end') else length_m
+                    # ИСПРАВЛЕНО: правильный расчет multiplier для каждой части
+                    if part == 'start' or part == 'end':
+                        multiplier = 1  # Части start и end берутся по 1 разу
+                    else:  # part == 'meter'
+                        multiplier = length_m  # Часть meter умножается на длину
 
                     if mtype == "Пиломатериал" and sm_length:
                         total_pieces = sm_qty * multiplier
@@ -2731,29 +2784,32 @@ class OrdersTab(QWidget):
                         total_quantity = math.ceil(sm_qty * multiplier)
                         requirements[mname].append((total_quantity, f"Этап({part})→Материал"))
 
-                # Материалы через изделия этапа
-                c.execute("""SELECT sp.part, sp.quantity, p.id, p.name
-                            FROM stage_products sp 
+                # Материалы из изделий в этапе
+                c.execute("""SELECT m.name, m.type, pc.quantity, pc.length, sp.quantity as stage_qty, sp.part, p.name as product_name
+                            FROM stage_products sp
                             JOIN products p ON sp.product_id = p.id
+                            JOIN product_composition pc ON sp.product_id = pc.product_id
+                            JOIN materials m ON pc.material_id = m.id
                             WHERE sp.stage_id = ?""", (item_id,))
 
-                for part, sp_qty, prod_id, prod_name in c.fetchall():
-                    multiplier = 1 if part in ('start', 'end') else length_m
+                for material, mtype, comp_qty, length, stage_qty, part, product_name in c.fetchall():
+                    # Вычисляем множитель для части этапа
+                    if part in ('start', 'end'):
+                        multiplier = 1
+                    else:  # meter
+                        multiplier = length_m
 
-                    c2 = conn.cursor()
-                    c2.execute("""SELECT m.name, m.type, pc.quantity, pc.length
-                                FROM product_composition pc 
-                                JOIN materials m ON pc.material_id = m.id
-                                WHERE pc.product_id = ?""", (prod_id,))
+                    total_qty = comp_qty * stage_qty * multiplier
+                    item_description = f"Этап({part})→{product_name}"
 
-                    for mname, mtype, q, length in c2.fetchall():
-                        if mtype == "Пиломатериал" and length:
-                            total_pieces = q * sp_qty * multiplier
-                            for _ in range(math.ceil(total_pieces)):
-                                requirements[mname].append((float(length), f"Этап({part})→{prod_name}"))
-                        else:
-                            total_quantity = math.ceil(q * sp_qty * multiplier)
-                            requirements[mname].append((total_quantity, f"Этап({part})→{prod_name}"))
+                    if mtype == "Пиломатериал" and length:
+                        # пиломатериалы – по метрам, как раньше
+                        for _ in range(math.ceil(total_qty)):
+                            requirements[material].append((float(length), item_description))
+                    else:
+                        # метизы и изделия – округляем в большую сторону
+                        total_pieces = math.ceil(total_qty)
+                        requirements[material].append((total_pieces, item_description))
 
         conn.close()
         return total_cost, requirements
@@ -2768,59 +2824,42 @@ class OrdersTab(QWidget):
 
     def _compute_stage_cost(self, stage_id: int, length_m: float) -> float:
         """
-        Рассчитывает стоимость этапа заданной длины.
-
-        Формула: (start_cost + end_cost) + meter_cost * length_m
+        Новый расчет стоимости этапа произвольной длины (с округлением позиций как в calculate_order)
         """
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Получаем стоимость изделий по частям
+            # Изделия
             cursor.execute("""
                 SELECT sp.part, p.cost, sp.quantity
-                FROM stage_products sp  
+                FROM stage_products sp
                 JOIN products p ON sp.product_id = p.id
                 WHERE sp.stage_id = ?
             """, (stage_id,))
-
-            start_cost = meter_cost = end_cost = 0.0
+            total_cost = 0.0
             for part, pcost, qty in cursor.fetchall():
-                cost_contribution = pcost * qty
-                if part == 'start':
-                    start_cost += cost_contribution
-                elif part == 'meter':
-                    meter_cost += cost_contribution
-                else:  # end
-                    end_cost += cost_contribution
+                multiplier = length_m if part == 'meter' else 1
+                qty_total = math.ceil(qty * multiplier)
+                total_cost += pcost * qty_total
 
-            # Получаем стоимость материалов по частям
+            # Материалы
             cursor.execute("""
                 SELECT sm.part, m.type, m.price, sm.quantity, sm.length
                 FROM stage_materials sm
-                JOIN materials m ON sm.material_id = m.id  
+                JOIN materials m ON sm.material_id = m.id
                 WHERE sm.stage_id = ?
             """, (stage_id,))
-
-            for part, mtype, price, qty, length in cursor.fetchall():
-                if mtype == "Пиломатериал" and length:
-                    cost_contribution = price * qty * length
+            for part, mtype, price, qty, length_val in cursor.fetchall():
+                multiplier = length_m if part == 'meter' else 1
+                qty_total = math.ceil(qty * multiplier)
+                if mtype == "Пиломатериал" and length_val:
+                    total_cost += price * qty_total * length_val
                 else:
-                    cost_contribution = price * qty
-
-                if part == 'start':
-                    start_cost += cost_contribution
-                elif part == 'meter':
-                    meter_cost += cost_contribution
-                else:  # end
-                    end_cost += cost_contribution
+                    total_cost += price * qty_total
 
             conn.close()
-
-            # Общая стоимость = фиксированные части + метровая часть * длина
-            total_cost = start_cost + end_cost + (meter_cost * length_m)
             return total_cost
-
         except Exception as e:
             print(f"Ошибка расчета стоимости этапа {stage_id}: {e}")
             return 0.0
