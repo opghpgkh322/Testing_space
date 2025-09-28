@@ -1801,6 +1801,7 @@ class WarehouseTab(QWidget):
 
     @staticmethod
     def find_git_root(path):
+        """Находит корневую директорию Git репозитория"""
         path = os.path.abspath(path)
         while True:
             if os.path.exists(os.path.join(path, '.git')):
@@ -1813,28 +1814,21 @@ class WarehouseTab(QWidget):
     def init_ui(self):
         main_layout = QVBoxLayout()
 
-        # Поисковое поле
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Поиск по складу…")
-        self.search_input.textChanged.connect(self.filter_table)
-        main_layout.addWidget(self.search_input)
-
-        # Группа добавления
+        # Группа для добавления на склад
         add_group = QGroupBox("Добавить на склад")
         add_layout = QFormLayout()
 
+        # Выбор материала
         self.material_combo = QComboBox()
-
         self.load_materials()
         add_layout.addRow(QLabel("Материал:"), self.material_combo)
 
-        # Поле длины
+        # Длина
         self.length_input = QLineEdit()
         self.length_input.setPlaceholderText("0 для метизов, иначе длина в метрах")
         add_layout.addRow(QLabel("Длина:"), self.length_input)
-        # Подключаем автозаполнение
-        self.material_combo.currentTextChanged.connect(self.on_warehouse_material_changed)
-        # Поле количества
+
+        # Количество
         self.quantity_input = QLineEdit()
         self.quantity_input.setPlaceholderText("Количество")
         add_layout.addRow(QLabel("Количество:"), self.quantity_input)
@@ -1854,105 +1848,222 @@ class WarehouseTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         main_layout.addWidget(self.table)
 
-        # Кнопка удаления
+        # Кнопки управления
         btn_layout = QHBoxLayout()
+
         self.delete_btn = QPushButton("Удалить выбранное")
         self.delete_btn.clicked.connect(self.delete_item)
         btn_layout.addWidget(self.delete_btn)
+
         main_layout.addLayout(btn_layout)
+
+        # Кнопки Git синхронизации
+        git_group = QGroupBox("Синхронизация с Git репозиторием")
+        git_layout = QHBoxLayout()
+
+        self.git_pull_btn = QPushButton("Загрузить из Git")
+        self.git_pull_btn.clicked.connect(self.git_pull)
+        git_layout.addWidget(self.git_pull_btn)
+
+        self.git_push_btn = QPushButton("Сохранить в Git")
+        self.git_push_btn.clicked.connect(self.git_push)
+        git_layout.addWidget(self.git_push_btn)
+
+        git_group.setLayout(git_layout)
+        main_layout.addWidget(git_group)
+
+        # Если репозиторий не найден, отключаем кнопки
+        if self.repo_root is None:
+            self.git_pull_btn.setEnabled(False)
+            self.git_push_btn.setEnabled(False)
+            self.git_pull_btn.setToolTip("Git репозиторий не найден")
+            self.git_push_btn.setToolTip("Git репозиторий не найден")
+        else:
+            # Показываем путь к репозиторию
+            repo_label = QLabel(f"Репо: {self.repo_root}")
+            repo_label.setStyleSheet("color: gray; font-size: 10px;")
+            main_layout.addWidget(repo_label)
 
         self.setLayout(main_layout)
 
+    def fix_git_ownership(self):
+        """Исправляет проблему с владельцем репозитория Git"""
+        try:
+            result = subprocess.run([
+                'git', 'config', '--global', '--add',
+                'safe.directory', self.repo_root
+            ], capture_output=True, text=True, timeout=30)
+
+            if result.returncode == 0:
+                QMessageBox.information(self, "Успех",
+                                        "Проблема с владельцем репозитория исправлена")
+                return True
+            else:
+                QMessageBox.critical(self, "Ошибка",
+                                     f"Не удалось исправить проблему:\n{result.stderr}")
+                return False
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при исправлении: {str(e)}")
+            return False
+
     def git_pull(self):
+        """Загружает актуальную версию базы данных из Git репозитория"""
         if self.repo_root is None:
             QMessageBox.critical(self, "Ошибка", "Git репозиторий не найден")
             return
 
-        reply = QMessageBox.question(self, "Подтверждение",
-                                     "Принудительный git pull может перезаписать локальные изменения. Продолжить?",
-                                     QMessageBox.Yes | QMessageBox.No)
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение",
+            "Это действие загрузит актуальную версию базы данных из репозитория.\n"
+            "Все несохраненные локальные изменения будут потеряны.\n\n"
+            "Продолжить?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
         if reply == QMessageBox.No:
             return
 
         try:
-            result = subprocess.run(['git', 'fetch', 'origin'], cwd=self.repo_root,
-                                    capture_output=True, text=True, timeout=30)
+            # Получаем актуальную версию из удаленного репозитория
+            result = subprocess.run(['git', 'fetch', 'origin'],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30)
 
             if result.returncode != 0:
-                error_msg = result.stderr if result.stderr else result.stdout
-                QMessageBox.critical(self, "Ошибка", f"Ошибка при получении изменений:\n{error_msg}")
-                return
-
-            db_repo_path = 'data/database.db'
-            reset_result = subprocess.run(['git', 'checkout', 'origin/master', '--', db_repo_path],
-                                          cwd=self.repo_root, capture_output=True, text=True, timeout=30)
-
-            if reset_result.returncode == 0:
-                repo_db_path = os.path.join(self.repo_root, db_repo_path)
-                if os.path.exists(repo_db_path):
-                    import shutil
-                    shutil.copy2(repo_db_path, self.db_path)
-                    QMessageBox.information(self, "Успех", "Склад заполнился актуальными остатками")
-                    self.main_window.reload_all_tabs()
+                # Проверяем, не связана ли ошибка с проблемой владельца
+                if "dubious ownership" in result.stderr:
+                    reply = QMessageBox.question(
+                        self,
+                        "Проблема с безопасностью Git",
+                        "Обнаружена проблема с владельцем репозитория.\n"
+                        "Исправить автоматически?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply == QMessageBox.Yes and self.fix_git_ownership():
+                        # Повторяем операцию после исправления
+                        self.git_pull()
+                    return
                 else:
-                    QMessageBox.critical(self, "Ошибка", "Файл базы данных не найден в репозитории")
-            else:
-                error_msg = reset_result.stderr if reset_result.stderr else reset_result.stdout
-                QMessageBox.critical(self, "Ошибка", f"Ошибка при обновлении файла:\n{error_msg}")
+                    QMessageBox.critical(self, "Ошибка",
+                                         f"Ошибка при получении изменений:\n{result.stderr}")
+                    return
 
+            # Восстанавливаем файл базы данных из последнего коммита
+            db_relative_path = os.path.relpath(self.db_path, self.repo_root)
+
+            result = subprocess.run(['git', 'checkout', 'origin/master', '--', db_relative_path],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30)
+
+            if result.returncode == 0:
+                QMessageBox.information(self, "Успех",
+                                        "База данных успешно обновлена из репозитория")
+                # Обновляем все вкладки
+                self.main_window.reload_all_tabs()
+            else:
+                QMessageBox.critical(self, "Ошибка",
+                                     f"Не удалось обновить базу данных:\n{result.stderr}")
+
+        except subprocess.TimeoutExpired:
+            QMessageBox.critical(self, "Ошибка", "Таймаут выполнения операции")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def git_push(self):
+        """Сохраняет текущую версию базы данных в Git репозиторий"""
         if self.repo_root is None:
             QMessageBox.critical(self, "Ошибка", "Git репозиторий не найден")
             return
 
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение",
+            "Это действие сохранит текущую версию базы данных в репозиторий.\n\n"
+            "Продолжить?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.No:
+            return
+
         try:
-            db_repo_path = 'data/database.db'
-            repo_db_path = os.path.join(self.repo_root, db_repo_path)
-            repo_db_dir = os.path.dirname(repo_db_path)
+            # Определяем относительный путь к базе данных
+            db_relative_path = os.path.relpath(self.db_path, self.repo_root)
 
-            if not os.path.exists(repo_db_dir):
-                os.makedirs(repo_db_dir)
+            # Добавляем файл базы данных в индекс
+            result = subprocess.run(['git', 'add', db_relative_path],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30)
 
-            import shutil
-            shutil.copy2(self.db_path, repo_db_path)
+            if result.returncode != 0:
+                # Проверяем, не связана ли ошибка с проблемой владельца
+                if "dubious ownership" in result.stderr:
+                    reply = QMessageBox.question(
+                        self,
+                        "Проблема с безопасностью Git",
+                        "Обнаружена проблема с владельцем репозитория.\n"
+                        "Исправить автоматически?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply == QMessageBox.Yes and self.fix_git_ownership():
+                        # Повторяем операцию после исправления
+                        self.git_push()
+                    return
+                else:
+                    QMessageBox.critical(self, "Ошибка",
+                                         f"Ошибка при добавлении файла:\n{result.stderr}")
+                    return
 
-            add_result = subprocess.run(['git', 'add', db_repo_path], cwd=self.repo_root,
-                                        capture_output=True, text=True, timeout=30)
+            # Проверяем есть ли изменения для коммита
+            result = subprocess.run(['git', 'status', '--porcelain', db_relative_path],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30)
 
-            if add_result.returncode != 0:
-                error_msg = add_result.stderr if add_result.stderr else add_result.stdout
-                QMessageBox.critical(self, "Ошибка", f"Ошибка при добавлении файла:\n{error_msg}")
+            if not result.stdout.strip():
+                QMessageBox.information(self, "Информация",
+                                        "Нет изменений в базе данных для сохранения")
                 return
 
-            status_result = subprocess.run(['git', 'status', '--porcelain', db_repo_path],
-                                           cwd=self.repo_root, capture_output=True, text=True, timeout=30)
+            # Создаем коммит
+            commit_message = f"Update database: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            result = subprocess.run(['git', 'commit', '-m', commit_message],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30)
 
-            if not status_result.stdout.strip():
-                QMessageBox.information(self, "Информация", "Нет изменений в базе данных для коммита")
+            if result.returncode != 0 and "nothing to commit" not in result.stderr:
+                QMessageBox.critical(self, "Ошибка",
+                                     f"Ошибка при создании коммита:\n{result.stderr}")
                 return
 
-            commit_result = subprocess.run(['git', 'commit', '-m', 'Update database from application', db_repo_path],
-                                           cwd=self.repo_root, capture_output=True, text=True, timeout=30)
+            # Отправляем изменения в удаленный репозиторий
+            result = subprocess.run(['git', 'push', 'origin', 'master'],
+                                    cwd=self.repo_root,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=60)
 
-            if commit_result.returncode != 0 and "nothing to commit" not in commit_result.stderr:
-                error_msg = commit_result.stderr if commit_result.stderr else commit_result.stdout
-                QMessageBox.critical(self, "Ошибка", f"Ошибка при коммите:\n{error_msg}")
-                return
-
-            push_result = subprocess.run(['git', 'push', 'origin', 'master', '--force'],
-                                         cwd=self.repo_root, capture_output=True, text=True, timeout=30)
-
-            if push_result.returncode == 0:
-                QMessageBox.information(self, "Успех", "Файл склада отправлен в репозиторий")
+            if result.returncode == 0:
+                QMessageBox.information(self, "Успех",
+                                        "База данных успешно сохранена в репозиторий")
             else:
-                error_msg = push_result.stderr if push_result.stderr else push_result.stdout
-                QMessageBox.critical(self, "Ошибка", f"Ошибка при отправке:\n{error_msg}")
+                QMessageBox.critical(self, "Ошибка",
+                                     f"Ошибка при отправке изменений:\n{result.stderr}")
 
+        except subprocess.TimeoutExpired:
+            QMessageBox.critical(self, "Ошибка", "Таймаут выполнения операции")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка: {str(e)}")
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def load_materials(self):
         conn = sqlite3.connect(self.db_path)
@@ -3449,6 +3560,14 @@ class MainWindow(QMainWindow):
             self.orders_tab.load_stages()
 
         self.statusBar().showMessage("Данные обновлены", 3000)
+
+    def force_close_all_db_connections(self):
+        """Принудительно закрывает все соединения с БД во всех вкладках"""
+        # Закрываем соединения в каждой вкладке, если у них есть такой метод
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if hasattr(tab, 'force_close_db_connections'):
+                tab.force_close_db_connections()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
